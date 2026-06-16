@@ -64,12 +64,20 @@ def background_enabled() -> bool:
     return DB.get_setting("background_enabled", "1") == "1"
 
 
-def sleep_with_heartbeat(seconds: int, status: str = "waiting") -> None:
+def sleep_with_heartbeat(seconds: int, status: str = "waiting") -> bool:
     deadline = utc_now() + dt.timedelta(seconds=seconds)
     while True:
         remaining = (deadline - utc_now()).total_seconds()
         if remaining <= 0:
-            return
+            return True
+        if not background_enabled():
+            write_runtime_status(
+                status="paused",
+                next_check_at=None,
+                last_check_status="manual_only",
+                last_check_message="Background checks are disabled",
+            )
+            return False
         write_runtime_status(status=status, next_check_at=deadline.isoformat())
         time.sleep(min(30, max(1, remaining)))
 
@@ -103,8 +111,7 @@ def main() -> int:
                 last_check_status="manual_only",
                 last_check_message="Background checks are disabled",
             )
-            time.sleep(15)
-            continue
+            return 0
 
         interval_seconds = current_interval_seconds()
         if interval_seconds <= 0:
@@ -138,7 +145,8 @@ def main() -> int:
                 last_check_message=str(exc),
                 next_check_at=next_check_at.isoformat(),
             )
-        sleep_with_heartbeat(interval_seconds)
+        if not sleep_with_heartbeat(interval_seconds):
+            return 0
 
 
 if __name__ == "__main__":

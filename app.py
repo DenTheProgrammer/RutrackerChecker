@@ -5,6 +5,7 @@ import os
 import re
 import sqlite3
 import socket
+import subprocess
 import threading
 import time
 import urllib.error
@@ -24,6 +25,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "app.db"
 STATIC_DIR = BASE_DIR / "static"
+TRAY_SCRIPT_PATH = BASE_DIR / "scripts" / "start-tray.ps1"
 RUTRACKER_BASE_URL = "https://rutracker.org/forum"
 APP_VERSION = "1.5.1"
 RUNTIME_STATUS_PATH = DATA_DIR / "runtime_status.json"
@@ -58,6 +60,31 @@ def config_int(name: str, default: int) -> int:
         return int(value)
     except ValueError:
         return default
+
+
+def start_tray_if_background_enabled() -> None:
+    if DB.get_setting("background_enabled", "1") != "1" or not TRAY_SCRIPT_PATH.exists():
+        return
+    try:
+        subprocess.Popen(
+            [
+                "powershell.exe",
+                "-STA",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-WindowStyle",
+                "Hidden",
+                "-File",
+                str(TRAY_SCRIPT_PATH),
+            ],
+            cwd=BASE_DIR,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except OSError as exc:
+        print(f"Could not start tray icon: {exc}")
 
 
 DEFAULT_MIN_SEEDERS = config_int("DEFAULT_MIN_SEEDERS", 5)
@@ -875,7 +902,13 @@ def read_runtime_status() -> dict[str, Any]:
 
     now = dt.datetime.now(dt.timezone.utc)
     heartbeat_at = parse_iso_datetime(str(payload.get("last_heartbeat_at") or ""))
+    background_enabled = DB.get_setting("background_enabled", "1") == "1"
     background_running = (
+        background_enabled
+        and heartbeat_at is not None
+        and now - heartbeat_at <= dt.timedelta(seconds=BACKGROUND_STALE_SECONDS)
+    )
+    heartbeat_fresh = (
         heartbeat_at is not None
         and now - heartbeat_at <= dt.timedelta(seconds=BACKGROUND_STALE_SECONDS)
     )
@@ -885,7 +918,7 @@ def read_runtime_status() -> dict[str, Any]:
     )
     last_reminder = parse_iso_datetime(DB.get_setting("last_pending_reminder_at"))
     next_reminder_at = None
-    if pending_count > 0 and reminder_hours > 0:
+    if background_enabled and pending_count > 0 and reminder_hours > 0:
         if last_reminder is None:
             next_reminder_at = now
         else:
@@ -893,14 +926,17 @@ def read_runtime_status() -> dict[str, Any]:
 
     return {
         "server_running": True,
-        "background_enabled": DB.get_setting("background_enabled", "1") == "1",
+        "background_enabled": background_enabled,
         "background_running": background_running,
+        "background_process_alive": heartbeat_fresh,
         "background_status_stale_seconds": BACKGROUND_STALE_SECONDS,
         "last_heartbeat_at": heartbeat_at.isoformat() if heartbeat_at else None,
         "last_check_at": payload.get("last_check_at"),
         "last_check_status": payload.get("last_check_status"),
         "last_check_message": payload.get("last_check_message"),
-        "next_check_at": payload.get("next_check_at") if background_running else None,
+        "next_check_at": payload.get("next_check_at")
+        if background_enabled and background_running
+        else None,
         "check_interval_minutes": DB.get_setting_int(
             "check_interval_minutes", DEFAULT_CHECK_INTERVAL_MINUTES
         ),
@@ -1057,7 +1093,10 @@ class RequestHandler(BaseHTTPRequestHandler):
     def do_PATCH(self) -> None:
         try:
             if self.path == "/api/settings":
-                self.send_json(DB.update_settings(self.read_json()))
+                settings = DB.update_settings(self.read_json())
+                if settings["background_enabled"]:
+                    start_tray_if_background_enabled()
+                self.send_json(settings)
                 return
 
             match = re.match(r"^/api/items/(\d+)$", self.path)
@@ -1125,6 +1164,7 @@ def main() -> None:
     SERVER = httpd
     print(f"RuTracker Release Checker running at http://{APP_HOST}:{APP_PORT}")
     print("Press Ctrl+C to stop.")
+    start_tray_if_background_enabled()
     try:
         httpd.serve_forever()
     finally:

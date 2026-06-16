@@ -70,6 +70,9 @@ if (-not (Test-Path $DataDir)) {
 }
 
 function Start-BackgroundLoop {
+    if (-not (Get-BackgroundEnabled)) {
+        return
+    }
     if (Test-ProcessCommandLine "*background_loop.py*") {
         return
     }
@@ -101,6 +104,15 @@ function Set-BackgroundEnabled {
         -ArgumentList "-c `"from app import DB; DB.set_setting('background_enabled', '$Value')`"" `
         -WorkingDirectory $Root `
         -WindowStyle Hidden
+}
+
+function Get-BackgroundEnabled {
+    try {
+        $Output = & $Python -c "from app import DB; print('1' if DB.get_setting('background_enabled', '1') == '1' else '0')" 2>$null
+        return (($Output | Select-Object -First 1) -eq "1")
+    } catch {
+        return $false
+    }
 }
 
 function Invoke-CheckNow {
@@ -241,6 +253,10 @@ $Menu = $null
 $Timer = $null
 
 function Update-Tray {
+    if (-not (Get-BackgroundEnabled)) {
+        [System.Windows.Forms.Application]::Exit()
+        return
+    }
     $State = Get-StateName
     if ($State -eq "stale") {
         Start-BackgroundLoop
@@ -269,6 +285,10 @@ function Update-Tray {
 }
 
 try {
+    if (-not (Get-BackgroundEnabled)) {
+        return
+    }
+
     Start-BackgroundLoop
 
     $NotifyIcon = New-Object System.Windows.Forms.NotifyIcon
@@ -292,7 +312,7 @@ try {
     $OpenItem.Add_Click({ Open-Ui })
     $NotifyIcon.Add_DoubleClick({ Open-Ui })
     $CheckItem.Add_Click({ Invoke-CheckNow })
-    $PauseItem.Add_Click({ Set-BackgroundEnabled $false })
+    $PauseItem.Add_Click({ Set-BackgroundEnabled $false; [System.Windows.Forms.Application]::Exit() })
     $ResumeItem.Add_Click({ Set-BackgroundEnabled $true; Start-BackgroundLoop })
     $RefreshItem.Add_Click({ Update-Tray })
     $ExitItem.Add_Click({

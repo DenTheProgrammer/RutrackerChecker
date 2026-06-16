@@ -96,14 +96,19 @@ function renderRuntime() {
   }
 
   runtimeDot.title = runtimeTitle.textContent;
-  nextCheckTime.textContent = runtime.next_check_at
-    ? `${formatRelative(runtime.next_check_at)} (${formatClock(runtime.next_check_at)})`
-    : "-";
-  nextReminderTime.textContent = runtime.next_reminder_at
-    ? `${formatRelative(runtime.next_reminder_at)} (${formatClock(runtime.next_reminder_at)})`
-    : runtime.pending_new_count > 0 && runtime.reminder_interval_hours <= 0
-      ? "disabled"
+  if (!runtime.background_enabled) {
+    nextCheckTime.textContent = "manual only";
+    nextReminderTime.textContent = "manual only";
+  } else {
+    nextCheckTime.textContent = runtime.next_check_at
+      ? `${formatRelative(runtime.next_check_at)} (${formatClock(runtime.next_check_at)})`
       : "-";
+    nextReminderTime.textContent = runtime.next_reminder_at
+      ? `${formatRelative(runtime.next_reminder_at)} (${formatClock(runtime.next_reminder_at)})`
+      : runtime.pending_new_count > 0 && runtime.reminder_interval_hours <= 0
+        ? "disabled"
+        : "-";
+  }
   lastCheckTime.textContent = runtime.last_check_at
     ? `${formatRelative(runtime.last_check_at)} (${formatClock(runtime.last_check_at)})`
     : "-";

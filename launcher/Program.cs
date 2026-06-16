@@ -34,6 +34,7 @@ internal static class Program
         ServerState state = await GetServerState();
         if (state.IsChecker)
         {
+            StartTrayIfBackgroundEnabled(appDir, state.BackgroundEnabled);
             OpenBrowser();
             return;
         }
@@ -114,6 +115,8 @@ internal static class Program
             return;
         }
 
+        state = await GetServerState();
+        StartTrayIfBackgroundEnabled(appDir, state.BackgroundEnabled);
         OpenBrowser();
     }
 
@@ -124,6 +127,61 @@ internal static class Program
             FileName = Url,
             UseShellExecute = true
         });
+    }
+
+    private static void StartTrayIfBackgroundEnabled(string appDir, bool backgroundEnabled)
+    {
+        if (!backgroundEnabled)
+        {
+            return;
+        }
+
+        string trayScript = Path.Combine(appDir, "scripts", "start-tray.ps1");
+        if (!File.Exists(trayScript))
+        {
+            return;
+        }
+
+        try
+        {
+            ProcessStartInfo startInfo = new()
+            {
+                FileName = "powershell.exe",
+                WorkingDirectory = appDir,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden
+            };
+            startInfo.ArgumentList.Add("-STA");
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-ExecutionPolicy");
+            startInfo.ArgumentList.Add("Bypass");
+            startInfo.ArgumentList.Add("-WindowStyle");
+            startInfo.ArgumentList.Add("Hidden");
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(trayScript);
+            Process.Start(startInfo);
+        }
+        catch
+        {
+            // The UI still works if the tray cannot be started.
+        }
+    }
+
+    private static bool ReadJsonBool(string body, string name)
+    {
+        string marker = "\"" + name + "\":";
+        int index = body.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (index < 0)
+        {
+            return false;
+        }
+        int valueStart = index + marker.Length;
+        while (valueStart < body.Length && char.IsWhiteSpace(body[valueStart]))
+        {
+            valueStart++;
+        }
+        return body.Substring(valueStart).StartsWith("true", StringComparison.OrdinalIgnoreCase);
     }
 
     private static PythonCommand? FindPython()
@@ -214,7 +272,7 @@ internal static class Program
             using HttpResponseMessage response = await client.GetAsync(Url + "api/health");
             if (response.StatusCode != HttpStatusCode.OK)
             {
-                return new ServerState(true, false, "");
+                return new ServerState(true, false, "", false);
             }
 
             string body = await response.Content.ReadAsStringAsync();
@@ -222,21 +280,21 @@ internal static class Program
             int index = body.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
             if (index < 0)
             {
-                return new ServerState(true, false, "");
+                return new ServerState(true, false, "", false);
             }
             int quoteStart = body.IndexOf('"', index + marker.Length);
             int quoteEnd = quoteStart >= 0 ? body.IndexOf('"', quoteStart + 1) : -1;
             string version = quoteStart >= 0 && quoteEnd > quoteStart
                 ? body.Substring(quoteStart + 1, quoteEnd - quoteStart - 1)
                 : "";
-            return new ServerState(true, true, version);
+            return new ServerState(true, true, version, ReadJsonBool(body, "background_enabled"));
         }
         catch
         {
-            return new ServerState(false, false, "");
+            return new ServerState(false, false, "", false);
         }
     }
 
     private sealed record PythonCommand(string FileName, string ArgumentPrefix);
-    private sealed record ServerState(bool IsUp, bool IsChecker, string Version);
+    private sealed record ServerState(bool IsUp, bool IsChecker, string Version, bool BackgroundEnabled);
 }

@@ -40,13 +40,15 @@ Open http://127.0.0.1:9876.
 
 ## Background Checks
 
-The UI server only checks while its process is running. For unattended checks without keeping the UI open, install the Windows Startup background loop:
+The UI server only checks while its process is running unless `Keep checking in background` is enabled in Settings. When background checks are enabled, launching `RutrackerChecker.exe` or saving the setting starts the tray icon; when the setting is disabled, the tray icon and background loop stop.
+
+For unattended checks after Windows logon, install the Windows Startup background entry:
 
 ```powershell
 .\install_startup.ps1
 ```
 
-This starts `background_loop.py` and a tray icon at Windows logon. The tray icon shows whether the background checker is running, paused, or stale, and its menu can open the UI, run a check now, or pause/resume automatic checks. The loop runs `check_once.py` using the interval from Settings, logs each run to `data/checks.log`, and shows a clickable Windows toast notification when new matching releases appear. Clicking the notification opens the UI, starting the local server first if needed. Temporary check errors are written to the log without showing a notification. If the computer is off, checks do not run while it is off; after the next logon, the loop resumes and unseen topic ids will still be marked as new.
+This starts the tray icon at Windows logon only when background checks are enabled. The tray icon shows whether the background checker is running or stale, and its menu can open the UI, run a check now, or pause automatic checks. The loop runs `check_once.py` using the interval from Settings, logs each run to `data/checks.log`, and shows a clickable Windows toast notification when new matching releases appear. Clicking the notification opens the UI, starting the local server first if needed. Temporary check errors are written to the log without showing a notification. If the computer is off, checks do not run while it is off; after the next logon, the loop resumes and unseen topic ids will still be marked as new.
 
 To remove the Startup entry and stop the loop:
 
