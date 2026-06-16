@@ -7,8 +7,15 @@ const settingsState = document.querySelector("#settingsState");
 const statusLine = document.querySelector("#statusLine");
 const checkAllButton = document.querySelector("#checkAllButton");
 const stopServerButton = document.querySelector("#stopServerButton");
+const runtimePanel = document.querySelector("#runtimePanel");
+const runtimeDot = document.querySelector("#runtimeDot");
+const runtimeTitle = document.querySelector("#runtimeTitle");
+const runtimeSummary = document.querySelector("#runtimeSummary");
+const nextCheckTime = document.querySelector("#nextCheckTime");
+const nextReminderTime = document.querySelector("#nextReminderTime");
+const lastCheckTime = document.querySelector("#lastCheckTime");
 
-let state = { items: [], config: {} };
+let state = { items: [], config: {}, runtime: {} };
 let selectedId = null;
 let lastChecks = new Map();
 const sessionId = crypto.randomUUID
@@ -33,6 +40,75 @@ function setBusy(button, busy, text) {
   if (text) button.textContent = text;
 }
 
+function parseDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatClock(value) {
+  const date = parseDate(value);
+  if (!date) return "-";
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatRelative(value) {
+  const date = parseDate(value);
+  if (!date) return "-";
+  const deltaSeconds = Math.round((date.getTime() - Date.now()) / 1000);
+  const absSeconds = Math.abs(deltaSeconds);
+  if (absSeconds < 45) return deltaSeconds >= 0 ? "now" : "just now";
+  const minutes = Math.round(absSeconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  let text;
+  if (days > 0) {
+    text = `${days}d ${hours % 24}h`;
+  } else if (hours > 0) {
+    text = `${hours}h ${minutes % 60}m`;
+  } else {
+    text = `${minutes}m`;
+  }
+  return deltaSeconds >= 0 ? `in ${text}` : `${text} ago`;
+}
+
+function renderRuntime() {
+  const runtime = state.runtime || {};
+  runtimePanel.classList.remove("running", "paused", "stale");
+
+  if (!runtime.background_enabled) {
+    runtimePanel.classList.add("paused");
+    runtimeTitle.textContent = "Manual only";
+    runtimeSummary.textContent = "Background checks are paused. Manual checks still work.";
+  } else if (runtime.background_running) {
+    runtimePanel.classList.add("running");
+    runtimeTitle.textContent = "Background running";
+    runtimeSummary.textContent = `${runtime.pending_new_count || 0} pending release(s). Checks run every ${runtime.check_interval_minutes || 0} min.`;
+  } else {
+    runtimePanel.classList.add("stale");
+    runtimeTitle.textContent = "Background not detected";
+    runtimeSummary.textContent = "Start the background checker or reinstall the startup shortcut.";
+  }
+
+  runtimeDot.title = runtimeTitle.textContent;
+  nextCheckTime.textContent = runtime.next_check_at
+    ? `${formatRelative(runtime.next_check_at)} (${formatClock(runtime.next_check_at)})`
+    : "-";
+  nextReminderTime.textContent = runtime.next_reminder_at
+    ? `${formatRelative(runtime.next_reminder_at)} (${formatClock(runtime.next_reminder_at)})`
+    : runtime.pending_new_count > 0 && runtime.reminder_interval_hours <= 0
+      ? "disabled"
+      : "-";
+  lastCheckTime.textContent = runtime.last_check_at
+    ? `${formatRelative(runtime.last_check_at)} (${formatClock(runtime.last_check_at)})`
+    : "-";
+}
+
 function applySettingsToForms() {
   const { config } = state;
   statusLine.textContent = `Auto-check every ${config.check_interval_minutes} min · Telegram ${config.telegram_enabled ? "enabled" : "not configured"}`;
@@ -52,6 +128,7 @@ function applySettingsToForms() {
   settingsForm.default_min_seeders.value = config.default_min_seeders || 5;
   settingsForm.default_min_size_gb.value = config.default_min_size_gb || 5;
   settingsForm.default_require_1080p.checked = Boolean(config.default_require_1080p);
+  settingsForm.background_enabled.checked = Boolean(config.background_enabled);
   settingsForm.check_interval_minutes.value = config.check_interval_minutes || 360;
   settingsForm.reminder_interval_hours.value = config.reminder_interval_hours ?? 12;
   settingsForm.max_search_pages.value = config.max_search_pages || 3;
@@ -60,6 +137,7 @@ function applySettingsToForms() {
 
 function render() {
   applySettingsToForms();
+  renderRuntime();
   renderList();
   renderDetail();
 }
@@ -262,8 +340,24 @@ function renderDetail() {
 }
 
 async function load() {
-  state = await api("/api/items");
+  const [itemsPayload, runtimePayload] = await Promise.all([
+    api("/api/items"),
+    api("/api/runtime"),
+  ]);
+  state = { ...itemsPayload, runtime: runtimePayload };
   render();
+}
+
+async function refreshRuntime() {
+  try {
+    state.runtime = await api("/api/runtime");
+    renderRuntime();
+  } catch (error) {
+    runtimePanel.classList.remove("running", "paused");
+    runtimePanel.classList.add("stale");
+    runtimeTitle.textContent = "Status unavailable";
+    runtimeSummary.textContent = error.message;
+  }
 }
 
 addForm.addEventListener("submit", async (event) => {
@@ -300,6 +394,7 @@ settingsForm.addEventListener("submit", async (event) => {
     data.default_min_seeders = Number(data.default_min_seeders || 0);
     data.default_min_size_gb = Number(data.default_min_size_gb || 0);
     data.default_require_1080p = settingsForm.default_require_1080p.checked;
+    data.background_enabled = settingsForm.background_enabled.checked;
     data.check_interval_minutes = Number(data.check_interval_minutes || 0);
     data.reminder_interval_hours = Number(data.reminder_interval_hours || 0);
     data.max_search_pages = Number(data.max_search_pages || 3);
@@ -324,6 +419,7 @@ checkAllButton.addEventListener("click", async () => {
       }
     }
     await load();
+    await refreshRuntime();
     statusLine.textContent = `Check complete: ${summary.items_checked} checked, ${summary.total_new} new this check, ${summary.total_pending_new || 0} pending.`;
   } catch (error) {
     statusLine.textContent = `Check failed: ${error.message}`;
@@ -349,6 +445,7 @@ async function heartbeat() {
 
 heartbeat();
 setInterval(heartbeat, 10000);
+setInterval(refreshRuntime, 15000);
 
 stopServerButton.addEventListener("click", async () => {
   setBusy(stopServerButton, true, "Stopping");

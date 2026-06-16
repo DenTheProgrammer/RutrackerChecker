@@ -301,6 +301,7 @@ class DatabaseTests(unittest.TestCase):
                     "default_min_seeders": 7,
                     "default_min_size_gb": 6.5,
                     "default_require_1080p": False,
+                    "background_enabled": False,
                     "check_interval_minutes": 30,
                     "reminder_interval_hours": 12,
                     "max_search_pages": 4,
@@ -315,6 +316,7 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(db.get_setting_int("default_min_seeders", 0), 7)
             self.assertEqual(db.get_public_settings()["default_min_size_gb"], 6.5)
             self.assertFalse(db.get_public_settings()["default_require_1080p"])
+            self.assertFalse(db.get_public_settings()["background_enabled"])
             self.assertEqual(db.get_public_settings()["reminder_interval_hours"], 12)
             self.assertEqual(db.get_public_settings()["max_search_pages"], 4)
             db.close()

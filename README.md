@@ -46,7 +46,7 @@ The UI server only checks while its process is running. For unattended checks wi
 .\install_startup.ps1
 ```
 
-This starts `background_loop.py` at Windows logon. It runs `check_once.py` using the interval from Settings, logs each run to `data/checks.log`, and shows a clickable Windows toast notification when new matching releases appear. Clicking the notification opens the UI, starting the local server first if needed. Temporary check errors are written to the log without showing a notification. If the computer is off, checks do not run while it is off; after the next logon, the loop resumes and unseen topic ids will still be marked as new.
+This starts `background_loop.py` and a tray icon at Windows logon. The tray icon shows whether the background checker is running, paused, or stale, and its menu can open the UI, run a check now, or pause/resume automatic checks. The loop runs `check_once.py` using the interval from Settings, logs each run to `data/checks.log`, and shows a clickable Windows toast notification when new matching releases appear. Clicking the notification opens the UI, starting the local server first if needed. Temporary check errors are written to the log without showing a notification. If the computer is off, checks do not run while it is off; after the next logon, the loop resumes and unseen topic ids will still be marked as new.
 
 To remove the Startup entry and stop the loop:
 
@@ -61,6 +61,7 @@ If you prefer Windows Task Scheduler instead, `install_task.ps1` and `uninstall_
 - `DEFAULT_MIN_SEEDERS`: default minimum active seeders for new items.
 - `DEFAULT_MIN_SIZE_GB`: default minimum torrent size in GB for new items.
 - `DEFAULT_REQUIRE_1080P`: `1` filters out releases below 1080p by title/row metadata.
+- `DEFAULT_BACKGROUND_ENABLED`: `1` keeps automatic background checks enabled; set to `0` for manual-only checks.
 - `DEFAULT_CHECK_INTERVAL_MINUTES`: background check interval. Set to `0` to disable scheduled checks.
 - `DEFAULT_REMINDER_INTERVAL_HOURS`: pending-release reminder interval. Set to `0` to disable reminders.
 - `MAX_SEARCH_PAGES`: how many RuTracker result pages to scan per query.

@@ -12,11 +12,11 @@ $Shell = New-Object -ComObject WScript.Shell
 $Shortcut = $Shell.CreateShortcut($ShortcutPath)
 $Shortcut.TargetPath = $Target
 $Shortcut.WorkingDirectory = $Root
-$Shortcut.Description = "Starts RuTracker Checker background loop"
+$Shortcut.Description = "Starts RuTracker Checker background loop and tray icon"
 $Shortcut.Save()
 
 Start-Process -FilePath "wscript.exe" -ArgumentList "`"$Target`"" -WindowStyle Hidden
 
 Write-Host "Installed Startup shortcut:"
 Write-Host $ShortcutPath
-Write-Host "Background checker started."
+Write-Host "Background checker and tray icon started."

@@ -10,6 +10,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import datetime as dt
 from dataclasses import dataclass
 from html import unescape
 from http import HTTPStatus
@@ -25,6 +26,8 @@ DB_PATH = DATA_DIR / "app.db"
 STATIC_DIR = BASE_DIR / "static"
 RUTRACKER_BASE_URL = "https://rutracker.org/forum"
 APP_VERSION = "1.5.1"
+RUNTIME_STATUS_PATH = DATA_DIR / "runtime_status.json"
+BACKGROUND_STALE_SECONDS = 180
 
 
 def load_env(path: Path = BASE_DIR / ".env") -> dict[str, str]:
@@ -61,6 +64,7 @@ DEFAULT_MIN_SEEDERS = config_int("DEFAULT_MIN_SEEDERS", 5)
 DEFAULT_MIN_SIZE_GB = config_int("DEFAULT_MIN_SIZE_GB", 5)
 DEFAULT_CHECK_INTERVAL_MINUTES = config_int("DEFAULT_CHECK_INTERVAL_MINUTES", 360)
 DEFAULT_REMINDER_INTERVAL_HOURS = config_int("DEFAULT_REMINDER_INTERVAL_HOURS", 12)
+DEFAULT_BACKGROUND_ENABLED = config("DEFAULT_BACKGROUND_ENABLED", "1") != "0"
 MAX_SEARCH_PAGES = config_int("MAX_SEARCH_PAGES", 3)
 AUTO_SHUTDOWN_WHEN_IDLE = config("AUTO_SHUTDOWN_WHEN_IDLE", "1") != "0"
 AUTO_SHUTDOWN_GRACE_SECONDS = config_int("AUTO_SHUTDOWN_GRACE_SECONDS", 45)
@@ -75,6 +79,7 @@ SETTING_ENV = {
     "default_min_seeders": "DEFAULT_MIN_SEEDERS",
     "default_min_size_gb": "DEFAULT_MIN_SIZE_GB",
     "default_require_1080p": "DEFAULT_REQUIRE_1080P",
+    "background_enabled": "DEFAULT_BACKGROUND_ENABLED",
     "check_interval_minutes": "DEFAULT_CHECK_INTERVAL_MINUTES",
     "reminder_interval_hours": "DEFAULT_REMINDER_INTERVAL_HOURS",
     "max_search_pages": "MAX_SEARCH_PAGES",
@@ -88,6 +93,7 @@ SETTING_DEFAULTS = {
     "default_min_seeders": str(DEFAULT_MIN_SEEDERS),
     "default_min_size_gb": str(DEFAULT_MIN_SIZE_GB),
     "default_require_1080p": "1",
+    "background_enabled": "1" if DEFAULT_BACKGROUND_ENABLED else "0",
     "check_interval_minutes": str(DEFAULT_CHECK_INTERVAL_MINUTES),
     "reminder_interval_hours": str(DEFAULT_REMINDER_INTERVAL_HOURS),
     "max_search_pages": str(MAX_SEARCH_PAGES),
@@ -368,6 +374,7 @@ class Database:
                 self.get_setting("default_min_size_gb", str(DEFAULT_MIN_SIZE_GB))
             ),
             "default_require_1080p": self.get_setting("default_require_1080p", "1") == "1",
+            "background_enabled": self.get_setting("background_enabled", "1") == "1",
             "check_interval_minutes": self.get_setting_int(
                 "check_interval_minutes", DEFAULT_CHECK_INTERVAL_MINUTES
             ),
@@ -387,6 +394,8 @@ class Database:
             value = str(raw_value).strip()
             if key in {"default_min_seeders", "check_interval_minutes", "reminder_interval_hours"}:
                 value = str(max(0, int(value or "0")))
+            if key == "background_enabled":
+                value = "1" if raw_value in (True, "true", "1", "on", 1) else "0"
             if key == "max_search_pages":
                 value = str(max(1, min(10, int(value or "1"))))
             if key == "default_min_size_gb":
@@ -846,6 +855,61 @@ def request_shutdown(reason: str = "requested") -> None:
     threading.Thread(target=stop, daemon=True).start()
 
 
+def parse_iso_datetime(value: str | None) -> dt.datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def read_runtime_status() -> dict[str, Any]:
+    try:
+        payload = json.loads(RUNTIME_STATUS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+
+    now = dt.datetime.now(dt.timezone.utc)
+    heartbeat_at = parse_iso_datetime(str(payload.get("last_heartbeat_at") or ""))
+    background_running = (
+        heartbeat_at is not None
+        and now - heartbeat_at <= dt.timedelta(seconds=BACKGROUND_STALE_SECONDS)
+    )
+    pending_count = sum(int(item.get("new_count") or 0) for item in DB.list_items())
+    reminder_hours = DB.get_setting_int(
+        "reminder_interval_hours", DEFAULT_REMINDER_INTERVAL_HOURS
+    )
+    last_reminder = parse_iso_datetime(DB.get_setting("last_pending_reminder_at"))
+    next_reminder_at = None
+    if pending_count > 0 and reminder_hours > 0:
+        if last_reminder is None:
+            next_reminder_at = now
+        else:
+            next_reminder_at = last_reminder + dt.timedelta(hours=reminder_hours)
+
+    return {
+        "server_running": True,
+        "background_enabled": DB.get_setting("background_enabled", "1") == "1",
+        "background_running": background_running,
+        "background_status_stale_seconds": BACKGROUND_STALE_SECONDS,
+        "last_heartbeat_at": heartbeat_at.isoformat() if heartbeat_at else None,
+        "last_check_at": payload.get("last_check_at"),
+        "last_check_status": payload.get("last_check_status"),
+        "last_check_message": payload.get("last_check_message"),
+        "next_check_at": payload.get("next_check_at") if background_running else None,
+        "check_interval_minutes": DB.get_setting_int(
+            "check_interval_minutes", DEFAULT_CHECK_INTERVAL_MINUTES
+        ),
+        "pending_new_count": pending_count,
+        "reminder_interval_hours": reminder_hours,
+        "next_reminder_at": next_reminder_at.isoformat() if next_reminder_at else None,
+    }
+
+
 def json_bytes(payload: Any) -> bytes:
     return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
 
@@ -919,11 +983,18 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_json(DB.get_public_settings())
                 return
 
+            if self.path == "/api/runtime":
+                self.send_json(read_runtime_status())
+                return
+
             if self.path == "/api/health":
+                runtime = read_runtime_status()
                 self.send_json(
                     {
                         "ok": True,
                         "version": APP_VERSION,
+                        "background_enabled": runtime["background_enabled"],
+                        "background_running": runtime["background_running"],
                         "active_ui_sessions": UI_SESSIONS.active_count(),
                         "auto_shutdown_when_idle": AUTO_SHUTDOWN_WHEN_IDLE,
                     }
@@ -1018,7 +1089,11 @@ def scheduler_loop() -> None:
         interval_minutes = DB.get_setting_int(
             "check_interval_minutes", DEFAULT_CHECK_INTERVAL_MINUTES
         )
-        if interval_minutes <= 0:
+        background_enabled = DB.get_setting("background_enabled", "1") == "1"
+        if not background_enabled or interval_minutes <= 0:
+            next_run = time.monotonic() + 60
+            continue
+        if read_runtime_status()["background_running"]:
             next_run = time.monotonic() + 60
             continue
         if time.monotonic() < next_run:

@@ -72,6 +72,71 @@ main {
   margin-bottom: 14px;
 }
 
+.runtime-panel {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(360px, 1.2fr);
+  gap: 16px;
+  align-items: center;
+}
+
+.runtime-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.status-dot {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  border-radius: 50%;
+  background: #98a2b3;
+  box-shadow: 0 0 0 4px #eef2f7;
+}
+
+.runtime-panel.running .status-dot {
+  background: #0f6b58;
+  box-shadow: 0 0 0 4px #dff7ec;
+}
+
+.runtime-panel.paused .status-dot {
+  background: #c2410c;
+  box-shadow: 0 0 0 4px #ffedd5;
+}
+
+.runtime-panel.stale .status-dot {
+  background: #b42318;
+  box-shadow: 0 0 0 4px #fee4e2;
+}
+
+.runtime-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.runtime-grid div {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fbfcff;
+}
+
+.runtime-grid span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.runtime-grid strong {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
 .section-heading,
 .sidebar-heading {
   display: flex;
@@ -329,6 +394,10 @@ button.danger {
 }
 
 @media (max-width: 920px) {
+  .runtime-panel {
+    grid-template-columns: 1fr;
+  }
+
   .workspace {
     grid-template-columns: 1fr;
   }
@@ -368,6 +437,10 @@ button.danger {
   .add-form,
   .detail-controls {
     display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-grid {
     grid-template-columns: 1fr;
   }
 

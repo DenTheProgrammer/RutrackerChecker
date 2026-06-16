@@ -19,6 +19,30 @@
   </header>
 
   <main>
+    <section class="panel runtime-panel" id="runtimePanel">
+      <div class="runtime-main">
+        <span class="status-dot" id="runtimeDot"></span>
+        <div>
+          <h2 id="runtimeTitle">Checking status...</h2>
+          <p id="runtimeSummary">Loading background state.</p>
+        </div>
+      </div>
+      <div class="runtime-grid">
+        <div>
+          <span>Next check</span>
+          <strong id="nextCheckTime">-</strong>
+        </div>
+        <div>
+          <span>Next reminder</span>
+          <strong id="nextReminderTime">-</strong>
+        </div>
+        <div>
+          <span>Last check</span>
+          <strong id="lastCheckTime">-</strong>
+        </div>
+      </div>
+    </section>
+
     <section class="panel settings-panel">
       <div class="section-heading">
         <h2>Settings</h2>
@@ -52,6 +76,10 @@
         <label class="checkbox-field">
           <input name="default_require_1080p" type="checkbox" checked>
           <span>Require 1080p+</span>
+        </label>
+        <label class="checkbox-field">
+          <input name="background_enabled" type="checkbox" checked>
+          <span>Keep checking in background</span>
         </label>
         <label class="small-field">
           <span>Check interval</span>
