@@ -6,7 +6,6 @@ const settingsForm = document.querySelector("#settingsForm");
 const settingsState = document.querySelector("#settingsState");
 const statusLine = document.querySelector("#statusLine");
 const checkAllButton = document.querySelector("#checkAllButton");
-const stopServerButton = document.querySelector("#stopServerButton");
 const runtimePanel = document.querySelector("#runtimePanel");
 const runtimeDot = document.querySelector("#runtimeDot");
 const runtimeTitle = document.querySelector("#runtimeTitle");
@@ -451,13 +450,3 @@ async function heartbeat() {
 heartbeat();
 setInterval(heartbeat, 10000);
 setInterval(refreshRuntime, 15000);
-
-stopServerButton.addEventListener("click", async () => {
-  setBusy(stopServerButton, true, "Stopping");
-  try {
-    await api("/api/shutdown", { method: "POST" });
-    statusLine.textContent = "Server stopped. You can close this tab.";
-  } catch (error) {
-    statusLine.textContent = "Server stopped. You can close this tab.";
-  }
-});

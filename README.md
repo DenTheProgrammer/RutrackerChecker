@@ -6,7 +6,7 @@ The app stores state in SQLite, shows `N new` counters per query, and can send T
 
 ## Quick Start
 
-Double-click `RutrackerChecker.exe` if it is present in this folder. It starts the local server and opens the UI in your browser.
+Double-click `RutrackerChecker.exe` if it is present in this folder. It starts the local server and opens the UI in your browser. When you close all UI tabs, the local server stops automatically after the idle grace period.
 
 On first launch, fill in RuTracker username/password in the Settings panel and click `Save settings`. The credentials are saved locally in `data/app.db`. Leave password/token fields empty later to keep saved values.
 
