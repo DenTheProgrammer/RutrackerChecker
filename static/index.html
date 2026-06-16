@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RuTracker Release Checker</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>RuTracker Release Checker</h1>
+      <p id="statusLine">Loading...</p>
+    </div>
+    <div class="top-actions">
+      <button id="checkAllButton" class="primary">Check all</button>
+      <button id="stopServerButton" class="danger">Stop server</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel settings-panel">
+      <div class="section-heading">
+        <h2>Settings</h2>
+        <span id="settingsState"></span>
+      </div>
+      <form id="settingsForm" class="settings-form">
+        <label>
+          <span>RuTracker username</span>
+          <input name="rutracker_username" autocomplete="username" placeholder="login">
+        </label>
+        <label>
+          <span>RuTracker password</span>
+          <input name="rutracker_password" type="password" autocomplete="current-password" placeholder="Leave empty to keep saved">
+        </label>
+        <label>
+          <span>Telegram bot token</span>
+          <input name="telegram_bot_token" type="password" placeholder="Optional">
+        </label>
+        <label>
+          <span>Telegram chat id</span>
+          <input name="telegram_chat_id" placeholder="Optional">
+        </label>
+        <label class="small-field">
+          <span>Default seeders</span>
+          <input name="default_min_seeders" type="number" min="0" value="5">
+        </label>
+        <label class="small-field">
+          <span>Default GB</span>
+          <input name="default_min_size_gb" type="number" min="0" step="0.1" value="5">
+        </label>
+        <label class="checkbox-field">
+          <input name="default_require_1080p" type="checkbox" checked>
+          <span>Require 1080p+</span>
+        </label>
+        <label class="small-field">
+          <span>Check interval</span>
+          <input name="check_interval_minutes" type="number" min="0" value="360">
+        </label>
+        <label class="small-field">
+          <span>Reminder interval (hours)</span>
+          <input name="reminder_interval_hours" type="number" min="0" value="12">
+        </label>
+        <label class="small-field">
+          <span>Search pages</span>
+          <input name="max_search_pages" type="number" min="1" max="10" value="3">
+        </label>
+        <button type="submit">Save settings</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <form id="addForm" class="add-form">
+        <label>
+          <span>Search query</span>
+          <input name="query" placeholder="Drama 2026" required>
+        </label>
+        <label class="small-field">
+          <span>Min seeders</span>
+          <input name="min_seeders" type="number" min="0" value="5">
+        </label>
+        <label class="small-field">
+          <span>Min GB</span>
+          <input name="min_size_gb" type="number" min="0" step="0.1" value="5">
+        </label>
+        <label class="checkbox-field">
+          <input name="require_1080p" type="checkbox" checked>
+          <span>Require 1080p+</span>
+        </label>
+        <button type="submit">Add</button>
+      </form>
+    </section>
+
+    <section class="workspace">
+      <aside class="sidebar panel">
+        <div class="sidebar-heading">
+          <h2>Queries</h2>
+          <span id="queryCount"></span>
+        </div>
+        <div id="itemList" class="item-list"></div>
+      </aside>
+
+      <section id="detailPanel" class="detail panel">
+        <div class="empty-detail">Select a query.</div>
+      </section>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
