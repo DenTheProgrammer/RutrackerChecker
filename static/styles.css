@@ -120,7 +120,6 @@ h1 {
 }
 
 .header-actions,
-.shelf-tools,
 .modal-actions {
   display: flex;
   align-items: center;
@@ -129,19 +128,102 @@ h1 {
 }
 
 .app-shell {
-  width: min(1560px, calc(100% - 40px));
+  width: min(1680px, calc(100% - 40px));
   margin: 0 auto;
   padding: 22px 0 42px;
 }
 
 .runtime-strip,
 .settings-drawer,
+.credential-gate,
 .movie-card,
 .add-card,
 .modal {
   border: 1px solid var(--border);
   background: var(--panel);
   box-shadow: var(--shadow);
+}
+
+.credential-gate {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(420px, 0.9fr) auto;
+  gap: 18px;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 20px;
+  border-radius: 22px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--danger-soft) 48%, transparent), transparent 44%),
+    var(--panel);
+}
+
+.credential-gate[hidden] {
+  display: none;
+}
+
+.credential-gate.attention {
+  animation: gate-pulse 520ms ease;
+}
+
+@keyframes gate-pulse {
+  0%,
+  100% {
+    transform: translateY(0);
+    border-color: var(--border);
+  }
+
+  40% {
+    transform: translateY(-2px);
+    border-color: color-mix(in srgb, var(--primary) 62%, var(--border));
+  }
+}
+
+.credential-copy {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.gate-mark {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  flex: 0 0 54px;
+  border-radius: 18px;
+  color: #fff;
+  background: linear-gradient(145deg, var(--danger), var(--new));
+  font-weight: 850;
+}
+
+.credential-copy h2 {
+  margin: 0;
+  font-size: 21px;
+}
+
+.credential-copy p {
+  margin-top: 7px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.credential-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+#credentialState {
+  justify-self: end;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+#settingsState.error,
+#credentialState.error {
+  color: var(--danger);
 }
 
 .runtime-strip {
@@ -319,6 +401,51 @@ input:focus {
   background: #fff;
 }
 
+.header-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  padding: 7px 11px;
+  color: var(--muted);
+  background: var(--panel-soft);
+}
+
+.header-switch input {
+  position: relative;
+  width: 38px;
+  min-width: 38px;
+  height: 22px;
+  appearance: none;
+  padding: 0;
+  border-radius: 999px;
+  background: var(--panel-soft);
+}
+
+.header-switch input::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--muted);
+  transition: transform 160ms ease, background 160ms ease;
+}
+
+.header-switch input:checked {
+  border-color: transparent;
+  background: var(--primary);
+}
+
+.header-switch input:checked::after {
+  transform: translateX(16px);
+  background: #fff;
+}
+
 .primary-button,
 .ghost-button,
 .danger-button,
@@ -385,23 +512,22 @@ button:disabled {
 .shelf-heading {
   display: flex;
   align-items: end;
-  justify-content: space-between;
-  gap: 18px;
+  justify-content: flex-start;
   margin: 24px 0 16px;
 }
 
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-  gap: 18px;
+  grid-template-columns: repeat(auto-fill, minmax(235px, 1fr));
+  gap: 22px;
 }
 
 .movie-card,
 .add-card {
   position: relative;
   overflow: hidden;
-  min-height: 372px;
-  border-radius: 20px;
+  min-height: 426px;
+  border-radius: 24px;
   transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }
 
@@ -499,7 +625,7 @@ button:disabled {
 }
 
 .card-copy {
-  padding: 13px 14px 10px;
+  padding: 15px 16px 12px;
 }
 
 .card-copy h3 {
@@ -509,7 +635,7 @@ button:disabled {
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
-  font-size: 16px;
+  font-size: 17px;
   line-height: 1.3;
 }
 
@@ -532,13 +658,13 @@ button:disabled {
 .card-actions {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  gap: 6px;
-  padding: 0 10px 12px;
+  gap: 8px;
+  padding: 0 12px 14px;
 }
 
 .card-actions button {
-  min-height: 34px;
-  border-radius: 10px;
+  min-height: 38px;
+  border-radius: 12px;
 }
 
 .card-actions button:disabled {
@@ -548,11 +674,21 @@ button:disabled {
 .add-card {
   display: grid;
   place-items: center;
-  min-height: 372px;
+  min-height: 426px;
   color: var(--muted);
   background:
     linear-gradient(145deg, var(--panel), color-mix(in srgb, var(--primary-soft) 48%, transparent)),
     var(--panel);
+}
+
+.add-card.locked {
+  border-style: dashed;
+  color: var(--subtle);
+}
+
+.add-card.locked .add-plus {
+  color: var(--danger);
+  background: var(--danger-soft);
 }
 
 .add-card-inner {
@@ -640,6 +776,14 @@ button:disabled {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .credential-gate {
+    grid-template-columns: 1fr;
+  }
+
+  #credentialState {
+    justify-self: start;
+  }
+
   .runtime-strip {
     grid-template-columns: 1fr;
   }
@@ -656,7 +800,6 @@ button:disabled {
   }
 
   .header-actions,
-  .shelf-tools,
   .modal-actions {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -669,6 +812,7 @@ button:disabled {
   }
 
   .runtime-metrics,
+  .credential-fields,
   .settings-form,
   .movie-form {
     grid-template-columns: 1fr;
@@ -681,7 +825,7 @@ button:disabled {
 
   .movie-card,
   .add-card {
-    min-height: 312px;
+    min-height: 348px;
     border-radius: 16px;
   }
 

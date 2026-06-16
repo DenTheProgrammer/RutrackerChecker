@@ -1,13 +1,20 @@
+import json
 import tempfile
+import threading
 import unittest
 import datetime as dt
 import sqlite3
+import urllib.error
+import urllib.request
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
+import app
 from check_once import build_notification
 from app import (
     Database,
+    RequestHandler,
     RuTrackerClient,
     SearchResult,
     fetch_movie_metadata,
@@ -303,17 +310,88 @@ class DatabaseTests(unittest.TestCase):
             self.assertIn("IMDb unavailable", payload["metadata_error"])
             db.close()
 
-    def test_fetch_movie_metadata_reads_imdb_meta_poster(self):
-        html = '<meta property="og:image" content="https://m.media-amazon.com/images/M/poster.jpg">'
+    def test_fetch_movie_metadata_reads_imdb_suggestion_poster(self):
+        payload = {
+            "d": [
+                {
+                    "id": "tt1234567",
+                    "l": "Drama",
+                    "y": 2026,
+                    "qid": "movie",
+                    "i": {"imageUrl": "https://m.media-amazon.com/images/M/poster.jpg"},
+                }
+            ]
+        }
 
-        with patch("app.fetch_html", return_value=html):
+        with patch("app.fetch_json", return_value=payload):
             metadata = fetch_movie_metadata("Drama", "https://www.imdb.com/title/tt1234567/")
 
         self.assertEqual(metadata["imdb_url"], "https://www.imdb.com/title/tt1234567/")
         self.assertEqual(
             metadata["poster_url"],
             "https://m.media-amazon.com/images/M/poster.jpg",
+            )
+
+    def test_fetch_movie_metadata_tries_simplified_candidates(self):
+        def fake_fetch_json(url):
+            if "the_odyssey_2026" in url:
+                return {
+                    "d": [
+                        {
+                            "id": "tt33764258",
+                            "l": "The Odyssey",
+                            "y": 2026,
+                            "qid": "movie",
+                            "i": {"imageUrl": "https://m.media-amazon.com/images/M/odyssey.jpg"},
+                        }
+                    ]
+                }
+            return {"d": []}
+
+        with patch("app.fetch_json", side_effect=fake_fetch_json):
+            metadata = fetch_movie_metadata("the odyssey nolan 2026")
+
+        self.assertEqual(metadata["imdb_url"], "https://www.imdb.com/title/tt33764258/")
+        self.assertEqual(
+            metadata["poster_url"],
+            "https://m.media-amazon.com/images/M/odyssey.jpg",
         )
+
+    def test_create_item_api_requires_rutracker_credentials(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            with patch.object(app, "DB", db):
+                server = ThreadingHTTPServer(("127.0.0.1", 0), RequestHandler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                url = f"http://127.0.0.1:{server.server_port}/api/items"
+                request = urllib.request.Request(
+                    url,
+                    data=json.dumps({"query": "Drama 2026"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+
+                try:
+                    with self.assertRaises(urllib.error.HTTPError) as context:
+                        urllib.request.urlopen(request, timeout=5)
+                    self.assertEqual(context.exception.code, 400)
+
+                    db.update_settings(
+                        {
+                            "rutracker_username": "alice",
+                            "rutracker_password": "secret",
+                        }
+                    )
+                    with urllib.request.urlopen(request, timeout=5) as response:
+                        payload = json.loads(response.read().decode("utf-8"))
+
+                    self.assertEqual(response.status, 201)
+                    self.assertEqual(payload["query"], "Drama 2026")
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    db.close()
 
     def test_result_insert_is_idempotent_and_reset_keeps_history(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -432,6 +510,43 @@ class DatabaseTests(unittest.TestCase):
             self.assertFalse(db.get_public_settings()["background_enabled"])
             self.assertEqual(db.get_public_settings()["reminder_interval_hours"], 12)
             self.assertEqual(db.get_public_settings()["max_search_pages"], 4)
+            db.close()
+
+    def test_runtime_reminder_due_now_when_interval_was_reduced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            item = db.create_item({"query": "Drama 2026"})
+            db.save_results(
+                item["id"],
+                [
+                    SearchResult(
+                        topic_id="111",
+                        title="Drama 2026 WEB-DL 1080p",
+                        url="https://rutracker.org/forum/viewtopic.php?t=111",
+                        seeders=10,
+                        resolution="1080p",
+                        size_bytes=5_000_000_000,
+                        size_label="4.66 GB",
+                    )
+                ],
+            )
+            db.set_setting("background_enabled", "1")
+            db.set_setting("reminder_interval_hours", "1")
+            db.set_setting(
+                "last_pending_reminder_at",
+                (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1, minutes=30)).isoformat(),
+            )
+
+            runtime_path = Path(tmp) / "runtime_status.json"
+            with patch.object(app, "DB", db), patch.object(app, "RUNTIME_STATUS_PATH", runtime_path):
+                before = dt.datetime.now(dt.timezone.utc)
+                runtime = app.read_runtime_status()
+                after = dt.datetime.now(dt.timezone.utc)
+
+            next_reminder = app.parse_iso_datetime(runtime["next_reminder_at"])
+            self.assertIsNotNone(next_reminder)
+            self.assertGreaterEqual(next_reminder, before)
+            self.assertLessEqual(next_reminder, after)
             db.close()
 
 

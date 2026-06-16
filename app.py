@@ -28,6 +28,7 @@ STATIC_DIR = BASE_DIR / "static"
 TRAY_SCRIPT_PATH = BASE_DIR / "scripts" / "start-tray.ps1"
 RUTRACKER_BASE_URL = "https://rutracker.org/forum"
 IMDB_BASE_URL = "https://www.imdb.com"
+IMDB_SUGGESTION_BASE_URL = "https://v3.sg.media-imdb.com/suggestion"
 APP_VERSION = "1.5.1"
 RUNTIME_STATUS_PATH = DATA_DIR / "runtime_status.json"
 BACKGROUND_STALE_SECONDS = 180
@@ -301,6 +302,14 @@ def normalize_imdb_url(value: Any) -> str:
     return url
 
 
+def imdb_title_id_from_url(value: Any) -> str:
+    url = normalize_imdb_url(value)
+    if not url:
+        return ""
+    match = re.search(r"/title/(tt\d+)", urllib.parse.urlparse(url).path)
+    return match.group(1) if match else ""
+
+
 def fetch_html(url: str) -> str:
     request = urllib.request.Request(
         url,
@@ -317,6 +326,20 @@ def fetch_html(url: str) -> str:
         return raw.decode(charset, errors="replace")
 
 
+def fetch_json(url: str) -> Any:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": METADATA_USER_AGENT,
+            "Accept": "application/json,text/plain,*/*",
+            "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+            "Cache-Control": "no-cache",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        return json.loads(response.read().decode("utf-8", errors="replace"))
+
+
 def extract_meta_content(html: str, names: tuple[str, ...]) -> str:
     for attr in ("property", "name"):
         for name in names:
@@ -330,29 +353,144 @@ def extract_meta_content(html: str, names: tuple[str, ...]) -> str:
     return ""
 
 
-def discover_imdb_url(title: str) -> str:
-    query = urllib.parse.quote(str(title or "").strip())
-    if not query:
-        return ""
-    html = fetch_html(f"{IMDB_BASE_URL}/find/?q={query}&s=tt&ttype=ft")
-    match = re.search(r'href=["\'](/title/(tt\d+)/[^"\']*)["\']', html, flags=re.I)
-    if not match:
-        return ""
-    return f"{IMDB_BASE_URL}/title/{match.group(2)}/"
+def normalize_metadata_query(value: str) -> str:
+    text = unescape(str(value or "")).lower()
+    text = re.sub(r"https?://\S+", " ", text)
+    text = re.sub(r"[^a-z0-9\s]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
-def fetch_movie_metadata(title: str, imdb_url: str = "") -> dict[str, str]:
-    normalized_imdb_url = normalize_imdb_url(imdb_url)
-    if not normalized_imdb_url:
-        normalized_imdb_url = discover_imdb_url(title)
-    if not normalized_imdb_url:
+def imdb_suggestion_key(value: str) -> str:
+    normalized = normalize_metadata_query(value)
+    if not normalized:
+        return ""
+    return urllib.parse.quote(normalized.replace(" ", "_"), safe="_")
+
+
+def imdb_metadata_candidates(*values: str) -> list[str]:
+    candidates: list[str] = []
+
+    def add(value: str) -> None:
+        normalized = normalize_metadata_query(value)
+        if normalized and normalized not in candidates:
+            candidates.append(normalized)
+
+    for value in values:
+        base = normalize_metadata_query(value)
+        if not base:
+            continue
+        add(base)
+        words = base.split()
+        if len(words) >= 3:
+            year = words[-1] if re.fullmatch(r"(19|20)\d{2}", words[-1]) else ""
+            if year:
+                add(" ".join(words[:-1]))
+                for index in range(1, len(words) - 1):
+                    add(" ".join(words[:index] + words[index + 1 :]))
+                for count in range(2, len(words) - 1):
+                    add(" ".join(words[:count] + [year]))
+            for count in range(2, min(len(words), 5)):
+                add(" ".join(words[:count]))
+
+    return candidates
+
+
+def score_imdb_suggestion(item: dict[str, Any], search_text: str, expected_id: str = "") -> int:
+    item_id = str(item.get("id") or "")
+    if not re.fullmatch(r"tt\d+", item_id):
+        return -1
+    if expected_id and item_id == expected_id:
+        return 10000
+
+    item_title = normalize_metadata_query(str(item.get("l") or ""))
+    search = normalize_metadata_query(search_text)
+    if not item_title or not search:
+        return 0
+
+    item_words = set(item_title.split())
+    search_words = set(search.split())
+    common = len(item_words & search_words)
+    score = common * 20
+    if item_title == re.sub(r"\b(19|20)\d{2}\b", "", search).strip():
+        score += 160
+    if item_title == search:
+        score += 220
+
+    year = str(item.get("y") or "")
+    if year and re.search(rf"\b{re.escape(year)}\b", search):
+        score += 80
+    if str(item.get("qid") or item.get("q") or "").lower() in {
+        "movie",
+        "feature",
+        "tvmovie",
+        "tv movie",
+    }:
+        score += 30
+    if isinstance(item.get("i"), dict) and item["i"].get("imageUrl"):
+        score += 20
+    return score
+
+
+def fetch_imdb_suggestion_metadata(key: str, search_text: str, expected_id: str = "") -> dict[str, str]:
+    if not key:
+        return {"imdb_url": "", "poster_url": ""}
+    first = key[0].lower()
+    if not first.isalnum():
         return {"imdb_url": "", "poster_url": ""}
 
-    html = fetch_html(normalized_imdb_url)
-    poster_url = clean_external_url(
-        extract_meta_content(html, ("og:image", "twitter:image"))
-    )
-    return {"imdb_url": normalized_imdb_url, "poster_url": poster_url}
+    payload = fetch_json(f"{IMDB_SUGGESTION_BASE_URL}/{first}/{key}.json")
+    rows = payload.get("d", []) if isinstance(payload, dict) else []
+    best: dict[str, Any] | None = None
+    best_score = -1
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        score = score_imdb_suggestion(row, search_text, expected_id=expected_id)
+        if score > best_score:
+            best = row
+            best_score = score
+
+    if not best or best_score < 0:
+        return {"imdb_url": "", "poster_url": ""}
+
+    item_id = str(best.get("id") or "")
+    image = best.get("i") if isinstance(best.get("i"), dict) else {}
+    return {
+        "imdb_url": f"{IMDB_BASE_URL}/title/{item_id}/",
+        "poster_url": clean_external_url(image.get("imageUrl")),
+        "_score": str(best_score),
+    }
+
+
+def discover_imdb_url(title: str) -> str:
+    metadata = fetch_movie_metadata(title)
+    return metadata.get("imdb_url", "")
+
+
+def fetch_movie_metadata(title: str, imdb_url: str = "", query: str = "") -> dict[str, str]:
+    title_id = imdb_title_id_from_url(imdb_url)
+    if title_id:
+        metadata = fetch_imdb_suggestion_metadata(title_id, title_id, expected_id=title_id)
+        if metadata.get("imdb_url"):
+            return {
+                "imdb_url": metadata.get("imdb_url", ""),
+                "poster_url": metadata.get("poster_url", ""),
+            }
+
+    best: dict[str, str] = {"imdb_url": normalize_imdb_url(imdb_url), "poster_url": ""}
+    best_score = -1
+    for candidate in imdb_metadata_candidates(title, query):
+        key = imdb_suggestion_key(candidate)
+        metadata = fetch_imdb_suggestion_metadata(key, candidate)
+        if metadata.get("imdb_url"):
+            score = int(metadata.get("_score") or 0)
+            if score > best_score:
+                best = metadata
+                best_score = score
+    return {
+        "imdb_url": best.get("imdb_url", ""),
+        "poster_url": best.get("poster_url", ""),
+    }
 
 
 def refresh_item_metadata(db: "Database", item_id: int) -> dict[str, Any]:
@@ -365,6 +503,7 @@ def refresh_item_metadata(db: "Database", item_id: int) -> dict[str, Any]:
         metadata = fetch_movie_metadata(
             str(item.get("title") or item.get("query") or ""),
             str(item.get("imdb_url") or ""),
+            str(item.get("query") or ""),
         )
         item = db.update_item_metadata(
             item_id,
@@ -519,6 +658,12 @@ class Database:
             ),
             "max_search_pages": self.get_setting_int("max_search_pages", MAX_SEARCH_PAGES),
         }
+
+    def has_rutracker_credentials(self) -> bool:
+        return bool(
+            self.get_setting("rutracker_username").strip()
+            and self.get_setting("rutracker_password").strip()
+        )
 
     def update_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
         allowed = set(SETTING_DEFAULTS)
@@ -1098,6 +1243,8 @@ def read_runtime_status() -> dict[str, Any]:
             next_reminder_at = now
         else:
             next_reminder_at = last_reminder + dt.timedelta(hours=reminder_hours)
+            if next_reminder_at < now:
+                next_reminder_at = now
 
     return {
         "server_running": True,
@@ -1127,6 +1274,12 @@ def json_bytes(payload: Any) -> bytes:
 
 class RequestHandler(BaseHTTPRequestHandler):
     server_version = "RutrackerChecker/1.0"
+
+    def finish(self) -> None:
+        try:
+            super().finish()
+        finally:
+            DB.close()
 
     def log_message(self, format: str, *args: Any) -> None:
         print(f"{self.address_string()} - {format % args}")
@@ -1230,6 +1383,8 @@ class RequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         try:
             if self.path == "/api/items":
+                if not DB.has_rutracker_credentials():
+                    raise ValueError("Введите логин и пароль RuTracker перед добавлением фильма")
                 self.send_json(DB.create_item(self.read_json()), 201)
                 return
 

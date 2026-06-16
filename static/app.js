@@ -2,7 +2,11 @@ const cardGrid = document.querySelector("#cardGrid");
 const settingsDrawer = document.querySelector("#settingsDrawer");
 const settingsToggle = document.querySelector("#settingsToggle");
 const themeToggle = document.querySelector("#themeToggle");
-const manualAddButton = document.querySelector("#manualAddButton");
+const backgroundToggle = document.querySelector("#backgroundToggle");
+const credentialGate = document.querySelector("#credentialGate");
+const gateUsername = document.querySelector("#gateUsername");
+const gatePassword = document.querySelector("#gatePassword");
+const credentialState = document.querySelector("#credentialState");
 const movieModal = document.querySelector("#movieModal");
 const movieForm = document.querySelector("#movieForm");
 const modalTitle = document.querySelector("#modalTitle");
@@ -13,7 +17,6 @@ const settingsState = document.querySelector("#settingsState");
 const shelfSummary = document.querySelector("#shelfSummary");
 const statusLine = document.querySelector("#statusLine");
 const checkAllButton = document.querySelector("#checkAllButton");
-const stopServerButton = document.querySelector("#stopServerButton");
 const runtimePanel = document.querySelector("#runtimePanel");
 const runtimeDot = document.querySelector("#runtimeDot");
 const runtimeTitle = document.querySelector("#runtimeTitle");
@@ -24,6 +27,8 @@ const lastCheckTime = document.querySelector("#lastCheckTime");
 
 let state = { items: [], config: {}, runtime: {} };
 let lastChecks = new Map();
+let settingsSaveTimer = null;
+let isHydratingSettings = false;
 
 const sessionId = crypto.randomUUID
   ? crypto.randomUUID()
@@ -36,7 +41,6 @@ const icons = {
   image: '<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
   moon: '<path d="M12 3a6 6 0 0 0 9 7.5A9 9 0 1 1 12 3Z"/>',
   plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
-  power: '<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/>',
   refresh: '<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12A9 9 0 0 1 18.5 5.8L21 8"/><path d="M21 3v5h-5"/>',
   reset: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
   save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/>',
@@ -142,12 +146,33 @@ function posterFallback(title) {
   return wrapper;
 }
 
+function hasCredentials() {
+  const config = state.config || {};
+  return Boolean(String(config.rutracker_username || "").trim() && config.has_rutracker_password);
+}
+
+function setSettingsStatus(message, isError = false) {
+  settingsState.textContent = message;
+  settingsState.classList.toggle("error", isError);
+  credentialState.textContent = message;
+  credentialState.classList.toggle("error", isError);
+}
+
+function focusCredentialGate() {
+  credentialGate.hidden = false;
+  credentialGate.classList.add("attention");
+  setTimeout(() => credentialGate.classList.remove("attention"), 520);
+  const target = gateUsername.value.trim() ? gatePassword : gateUsername;
+  target.focus();
+}
+
 function applySettingsToForms() {
   const config = state.config || {};
   statusLine.textContent = `Автопроверка каждые ${config.check_interval_minutes || 0} мин · Telegram ${config.telegram_enabled ? "подключен" : "не настроен"}`;
-  settingsState.textContent = config.has_rutracker_password
-    ? "RuTracker сохранен"
-    : "Введите RuTracker логин и пароль";
+  setSettingsStatus(
+    hasCredentials() ? "RuTracker сохранен · autosave включен" : "Введите RuTracker логин и пароль"
+  );
+  isHydratingSettings = true;
   settingsForm.rutracker_username.value = config.rutracker_username || "";
   settingsForm.rutracker_password.value = "";
   settingsForm.rutracker_password.placeholder = config.has_rutracker_password
@@ -162,9 +187,21 @@ function applySettingsToForms() {
   settingsForm.default_min_size_gb.value = config.default_min_size_gb ?? 5;
   settingsForm.default_require_1080p.checked = Boolean(config.default_require_1080p);
   settingsForm.background_enabled.checked = Boolean(config.background_enabled);
+  backgroundToggle.checked = Boolean(config.background_enabled);
   settingsForm.check_interval_minutes.value = config.check_interval_minutes ?? 360;
   settingsForm.reminder_interval_hours.value = config.reminder_interval_hours ?? 12;
   settingsForm.max_search_pages.value = config.max_search_pages ?? 3;
+  if (document.activeElement !== gateUsername) {
+    gateUsername.value = config.rutracker_username || "";
+  }
+  if (document.activeElement !== gatePassword) {
+    gatePassword.value = "";
+  }
+  gatePassword.placeholder = config.has_rutracker_password
+    ? "Сохранен · можно оставить пустым"
+    : "Обязательно";
+  credentialGate.hidden = hasCredentials();
+  isHydratingSettings = false;
 }
 
 function renderRuntime() {
@@ -211,16 +248,24 @@ function renderCards() {
     : "Добавьте первый поиск или выберите карточку для открытия RuTracker.";
 
   const add = document.createElement("button");
-  add.className = "add-card";
+  const locked = !hasCredentials();
+  add.className = `add-card ${locked ? "locked" : ""}`.trim();
   add.type = "button";
+  add.setAttribute("aria-disabled", String(locked));
   add.innerHTML = `
     <span class="add-card-inner">
       <span class="add-plus">${icon("plus")}</span>
-      <strong>Добавить фильм</strong>
-      <span>Новый поиск RuTracker</span>
+      <strong>${locked ? "Сначала войдите" : "Добавить фильм"}</strong>
+      <span>${locked ? "Нужны логин и пароль RuTracker" : "Новый поиск RuTracker"}</span>
     </span>
   `;
-  add.addEventListener("click", () => openMovieModal());
+  add.addEventListener("click", () => {
+    if (locked) {
+      focusCredentialGate();
+      return;
+    }
+    openMovieModal();
+  });
   cardGrid.append(add);
 
   for (const item of state.items) {
@@ -330,6 +375,10 @@ function render() {
 }
 
 function openMovieModal(item = null) {
+  if (!item && !hasCredentials()) {
+    focusCredentialGate();
+    return;
+  }
   const config = state.config || {};
   const fields = movieForm.elements;
   movieForm.reset();
@@ -355,6 +404,11 @@ function closeMovieModal() {
 
 async function saveMovie(event) {
   event.preventDefault();
+  if (!movieForm.elements.id.value && !hasCredentials()) {
+    focusCredentialGate();
+    statusLine.textContent = "Сначала введите логин и пароль RuTracker.";
+    return;
+  }
   const submitButton = movieForm.querySelector("button[type='submit']");
   setBusy(submitButton, true, "Сохраняем");
   try {
@@ -454,6 +508,58 @@ async function refreshRuntime() {
   }
 }
 
+function collectSettingsPayload() {
+  const data = {
+    rutracker_username: settingsForm.rutracker_username.value.trim(),
+    telegram_chat_id: settingsForm.telegram_chat_id.value.trim(),
+    default_min_seeders: Number(settingsForm.default_min_seeders.value || 0),
+    default_min_size_gb: Number(settingsForm.default_min_size_gb.value || 0),
+    default_require_1080p: settingsForm.default_require_1080p.checked,
+    background_enabled: settingsForm.background_enabled.checked,
+    check_interval_minutes: Number(settingsForm.check_interval_minutes.value || 0),
+    reminder_interval_hours: Number(settingsForm.reminder_interval_hours.value || 0),
+    max_search_pages: Number(settingsForm.max_search_pages.value || 3),
+  };
+  if (settingsForm.rutracker_password.value.trim()) {
+    data.rutracker_password = settingsForm.rutracker_password.value;
+  }
+  if (settingsForm.telegram_bot_token.value.trim()) {
+    data.telegram_bot_token = settingsForm.telegram_bot_token.value;
+  }
+  return data;
+}
+
+async function saveSettings(payload = collectSettingsPayload()) {
+  setSettingsStatus("Сохраняем...");
+  try {
+    const updated = await api("/api/settings", { method: "PATCH", body: JSON.stringify(payload) });
+    state.config = { ...state.config, ...updated };
+    if (typeof payload.background_enabled !== "undefined") {
+      settingsForm.background_enabled.checked = Boolean(updated.background_enabled);
+      backgroundToggle.checked = Boolean(updated.background_enabled);
+      await refreshRuntime();
+    }
+    applySettingsToForms();
+    renderCards();
+    setSettingsStatus(hasCredentials() ? "Сохранено" : "Введите RuTracker логин и пароль");
+  } catch (error) {
+    setSettingsStatus(`Ошибка сохранения: ${error.message}`, true);
+  }
+}
+
+function scheduleSettingsSave() {
+  if (isHydratingSettings) return;
+  clearTimeout(settingsSaveTimer);
+  settingsSaveTimer = setTimeout(() => saveSettings(), 700);
+}
+
+function syncCredentialGateToSettings() {
+  settingsForm.rutracker_username.value = gateUsername.value;
+  if (gatePassword.value) {
+    settingsForm.rutracker_password.value = gatePassword.value;
+  }
+}
+
 settingsToggle.addEventListener("click", () => {
   settingsDrawer.hidden = !settingsDrawer.hidden;
 });
@@ -462,7 +568,22 @@ themeToggle.addEventListener("click", () => {
   applyTheme(document.body.classList.contains("light") ? "dark" : "light");
 });
 
-manualAddButton.addEventListener("click", () => openMovieModal());
+backgroundToggle.addEventListener("change", () => {
+  settingsForm.background_enabled.checked = backgroundToggle.checked;
+  saveSettings({ background_enabled: backgroundToggle.checked });
+});
+
+for (const eventName of ["input", "change"]) {
+  gateUsername.addEventListener(eventName, () => {
+    syncCredentialGateToSettings();
+    scheduleSettingsSave();
+  });
+  gatePassword.addEventListener(eventName, () => {
+    syncCredentialGateToSettings();
+    scheduleSettingsSave();
+  });
+}
+
 modalCloseButton.addEventListener("click", closeMovieModal);
 metadataButton.addEventListener("click", () => refreshMetadata());
 
@@ -478,23 +599,22 @@ movieForm.addEventListener("submit", saveMovie);
 
 settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const submitButton = settingsForm.querySelector("button[type='submit']");
-  setBusy(submitButton, true, "Сохраняем");
-  try {
-    const data = Object.fromEntries(new FormData(settingsForm).entries());
-    data.default_min_seeders = Number(data.default_min_seeders || 0);
-    data.default_min_size_gb = Number(data.default_min_size_gb || 0);
-    data.default_require_1080p = settingsForm.default_require_1080p.checked;
-    data.background_enabled = settingsForm.background_enabled.checked;
-    data.check_interval_minutes = Number(data.check_interval_minutes || 0);
-    data.reminder_interval_hours = Number(data.reminder_interval_hours || 0);
-    data.max_search_pages = Number(data.max_search_pages || 3);
-    await api("/api/settings", { method: "PATCH", body: JSON.stringify(data) });
-    await load();
-  } catch (error) {
-    statusLine.textContent = `Настройки не сохранены: ${error.message}`;
-  } finally {
-    setBusy(submitButton, false);
+  clearTimeout(settingsSaveTimer);
+  await saveSettings();
+});
+
+settingsForm.addEventListener("input", (event) => {
+  if (event.target.matches("input[type='checkbox']")) return;
+  scheduleSettingsSave();
+});
+
+settingsForm.addEventListener("change", (event) => {
+  if (isHydratingSettings) return;
+  if (event.target.matches("input[type='checkbox']")) {
+    if (event.target.name === "background_enabled") {
+      backgroundToggle.checked = event.target.checked;
+    }
+    saveSettings();
   }
 });
 
@@ -515,16 +635,6 @@ checkAllButton.addEventListener("click", async () => {
     statusLine.textContent = `Проверка не удалась: ${error.message}`;
   } finally {
     setBusy(checkAllButton, false);
-  }
-});
-
-stopServerButton.addEventListener("click", async () => {
-  setBusy(stopServerButton, true, "...");
-  try {
-    await api("/api/shutdown", { method: "POST" });
-    statusLine.textContent = "Сервер остановлен. Вкладку можно закрыть.";
-  } catch (error) {
-    statusLine.textContent = "Сервер остановлен. Вкладку можно закрыть.";
   }
 });
 

@@ -20,6 +20,10 @@
       <button id="themeToggle" class="icon-button" type="button" aria-label="Переключить тему" title="Переключить тему">
         <span data-icon="moon"></span>
       </button>
+      <label class="header-switch" title="Фоновая проверка">
+        <input id="backgroundToggle" type="checkbox" checked>
+        <span>Фон</span>
+      </label>
       <button id="settingsToggle" class="ghost-button" type="button">
         <span data-icon="settings"></span>
         Настройки
@@ -27,9 +31,6 @@
       <button id="checkAllButton" class="primary-button" type="button">
         <span data-icon="refresh"></span>
         Проверить все
-      </button>
-      <button id="stopServerButton" class="danger-button" type="button">
-        <span data-icon="power"></span>
       </button>
     </div>
   </header>
@@ -57,6 +58,27 @@
           <strong id="lastCheckTime">-</strong>
         </div>
       </div>
+    </section>
+
+    <section class="credential-gate" id="credentialGate" hidden>
+      <div class="credential-copy">
+        <span class="gate-mark">RT</span>
+        <div>
+          <h2>Введите логин и пароль RuTracker</h2>
+          <p>Без авторизации нельзя добавить новый фильм: приложение не сможет проверить выдачу и сохранить рабочий поиск.</p>
+        </div>
+      </div>
+      <div class="credential-fields">
+        <label>
+          <span>RuTracker логин</span>
+          <input id="gateUsername" autocomplete="username" placeholder="login">
+        </label>
+        <label>
+          <span>RuTracker пароль</span>
+          <input id="gatePassword" type="password" autocomplete="current-password" placeholder="Обязательно">
+        </label>
+      </div>
+      <span id="credentialState">Сохраняется автоматически</span>
     </section>
 
     <section class="settings-drawer" id="settingsDrawer" hidden>
@@ -109,10 +131,6 @@
           <input name="background_enabled" type="checkbox" checked>
           <span>Фон</span>
         </label>
-        <button class="primary-button" type="submit">
-          <span data-icon="save"></span>
-          Сохранить
-        </button>
       </form>
     </section>
 
@@ -120,12 +138,6 @@
       <div>
         <h2>Отслеживаемые фильмы</h2>
         <p id="shelfSummary">Добавьте первый поиск или выберите карточку для открытия RuTracker.</p>
-      </div>
-      <div class="shelf-tools">
-        <button id="manualAddButton" class="ghost-button" type="button">
-          <span data-icon="plus"></span>
-          Добавить
-        </button>
       </div>
     </section>
 
