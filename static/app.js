@@ -386,6 +386,7 @@ function openMovieModal(item = null) {
   fields.title.value = item?.title || "";
   fields.query.value = item?.query || "";
   fields.imdb_url.value = item?.imdb_url || "";
+  fields.poster_url.value = item?.poster_url || "";
   fields.min_seeders.value = item?.min_seeders ?? config.default_min_seeders ?? 5;
   fields.min_size_gb.value = item?.min_size_gb ?? config.default_min_size_gb ?? 5;
   fields.require_1080p.checked = item
@@ -417,6 +418,8 @@ async function saveMovie(event) {
     delete data.id;
     data.title = String(data.title || data.query || "").trim();
     data.query = String(data.query || data.title || "").trim();
+    data.imdb_url = String(data.imdb_url || "").trim();
+    data.poster_url = String(data.poster_url || "").trim();
     data.min_seeders = Number(data.min_seeders || 0);
     data.min_size_gb = Number(data.min_size_gb || 0);
     data.require_1080p = movieForm.elements.require_1080p.checked;
@@ -427,7 +430,9 @@ async function saveMovie(event) {
       : await api("/api/items", { method: "POST", body: JSON.stringify(data) });
     closeMovieModal();
     await load();
-    refreshMetadata(item.id);
+    if (!data.poster_url) {
+      refreshMetadata(item.id);
+    }
   } catch (error) {
     statusLine.textContent = `Не удалось сохранить: ${error.message}`;
   } finally {
@@ -440,7 +445,7 @@ async function refreshMetadata(itemId = movieForm.elements.id.value) {
     statusLine.textContent = "Сначала сохраните карточку, потом обновите постер.";
     return;
   }
-  statusLine.textContent = "Обновляем постер IMDb...";
+  statusLine.textContent = "Ищем постер...";
   try {
     const payload = await api(`/api/items/${itemId}/refresh-metadata`, { method: "POST" });
     await load();

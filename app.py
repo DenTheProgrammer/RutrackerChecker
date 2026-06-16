@@ -29,6 +29,9 @@ TRAY_SCRIPT_PATH = BASE_DIR / "scripts" / "start-tray.ps1"
 RUTRACKER_BASE_URL = "https://rutracker.org/forum"
 IMDB_BASE_URL = "https://www.imdb.com"
 IMDB_SUGGESTION_BASE_URL = "https://v3.sg.media-imdb.com/suggestion"
+WIKIDATA_API_URL = "https://www.wikidata.org/w/api.php"
+WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
+WIKIMEDIA_FILE_PATH_BASE = "https://commons.wikimedia.org/wiki/Special:FilePath"
 APP_VERSION = "1.5.1"
 RUNTIME_STATUS_PATH = DATA_DIR / "runtime_status.json"
 BACKGROUND_STALE_SECONDS = 180
@@ -462,6 +465,162 @@ def fetch_imdb_suggestion_metadata(key: str, search_text: str, expected_id: str 
     }
 
 
+def wikimedia_file_url(filename: str) -> str:
+    name = str(filename or "").strip().replace(" ", "_")
+    if not name:
+        return ""
+    return clean_external_url(
+        f"{WIKIMEDIA_FILE_PATH_BASE}/{urllib.parse.quote(name, safe='')}"
+    )
+
+
+def wikidata_claim_value(claim: dict[str, Any]) -> Any:
+    mainsnak = claim.get("mainsnak") if isinstance(claim, dict) else {}
+    datavalue = mainsnak.get("datavalue") if isinstance(mainsnak, dict) else {}
+    return datavalue.get("value") if isinstance(datavalue, dict) else None
+
+
+def wikidata_image_from_entity(entity: dict[str, Any]) -> str:
+    claims = entity.get("claims") if isinstance(entity, dict) else {}
+    image_claims = claims.get("P18") if isinstance(claims, dict) else []
+    for claim in image_claims if isinstance(image_claims, list) else []:
+        value = wikidata_claim_value(claim)
+        if isinstance(value, str):
+            url = wikimedia_file_url(value)
+            if url:
+                return url
+    return ""
+
+
+def wikidata_imdb_id_from_entity(entity: dict[str, Any]) -> str:
+    claims = entity.get("claims") if isinstance(entity, dict) else {}
+    imdb_claims = claims.get("P345") if isinstance(claims, dict) else []
+    for claim in imdb_claims if isinstance(imdb_claims, list) else []:
+        value = wikidata_claim_value(claim)
+        if isinstance(value, str) and re.fullmatch(r"tt\d+", value):
+            return value
+    return ""
+
+
+def fetch_wikidata_entity(entity_id: str) -> dict[str, Any]:
+    if not re.fullmatch(r"Q\d+", entity_id or ""):
+        return {}
+    query = urllib.parse.urlencode(
+        {
+            "action": "wbgetentities",
+            "ids": entity_id,
+            "props": "claims",
+            "format": "json",
+        }
+    )
+    payload = fetch_json(f"{WIKIDATA_API_URL}?{query}")
+    entities = payload.get("entities", {}) if isinstance(payload, dict) else {}
+    entity = entities.get(entity_id) if isinstance(entities, dict) else {}
+    return entity if isinstance(entity, dict) else {}
+
+
+def fetch_wikidata_metadata_by_imdb_id(imdb_id: str) -> dict[str, str]:
+    if not re.fullmatch(r"tt\d+", imdb_id or ""):
+        return {"imdb_url": "", "poster_url": ""}
+    sparql = (
+        'SELECT ?item ?image WHERE { '
+        f'?item wdt:P345 "{imdb_id}". '
+        "OPTIONAL { ?item wdt:P18 ?image. } "
+        "} LIMIT 1"
+    )
+    query = urllib.parse.urlencode({"format": "json", "query": sparql})
+    payload = fetch_json(f"{WIKIDATA_SPARQL_URL}?{query}")
+    results = payload.get("results", {}) if isinstance(payload, dict) else {}
+    bindings = results.get("bindings", []) if isinstance(results, dict) else []
+    if not bindings:
+        return {"imdb_url": "", "poster_url": ""}
+    first = bindings[0] if isinstance(bindings[0], dict) else {}
+    image = first.get("image") if isinstance(first, dict) else {}
+    poster_url = clean_external_url(image.get("value")) if isinstance(image, dict) else ""
+    return {
+        "imdb_url": f"{IMDB_BASE_URL}/title/{imdb_id}/",
+        "poster_url": poster_url,
+    }
+
+
+def score_wikidata_search_result(
+    row: dict[str, Any],
+    search_text: str,
+    expected_imdb_id: str = "",
+) -> int:
+    label = normalize_metadata_query(str(row.get("label") or ""))
+    description = normalize_metadata_query(str(row.get("description") or ""))
+    search = normalize_metadata_query(search_text)
+    if not label or not search:
+        return -1
+
+    score = 0
+    if label == search:
+        score += 220
+    if label == re.sub(r"\b(19|20)\d{2}\b", "", search).strip():
+        score += 140
+    score += len(set(label.split()) & set(search.split())) * 18
+    if re.search(r"\b(film|movie|television film|animated film)\b", description):
+        score += 50
+    year_match = re.search(r"\b(19|20)\d{2}\b", search)
+    if year_match and year_match.group(1) in description:
+        score += 35
+    if expected_imdb_id and expected_imdb_id in str(row):
+        score += 1000
+    return score
+
+
+def fetch_wikidata_metadata_by_title(
+    title: str,
+    query: str = "",
+    expected_imdb_id: str = "",
+) -> dict[str, str]:
+    best: dict[str, str] = {"imdb_url": "", "poster_url": ""}
+    best_score = -1
+    for candidate in imdb_metadata_candidates(title, query):
+        params = urllib.parse.urlencode(
+            {
+                "action": "wbsearchentities",
+                "search": candidate,
+                "language": "en",
+                "format": "json",
+                "limit": "5",
+            }
+        )
+        payload = fetch_json(f"{WIKIDATA_API_URL}?{params}")
+        rows = payload.get("search", []) if isinstance(payload, dict) else []
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            entity_id = str(row.get("id") or "")
+            entity = fetch_wikidata_entity(entity_id)
+            poster_url = wikidata_image_from_entity(entity)
+            imdb_id = wikidata_imdb_id_from_entity(entity)
+            if expected_imdb_id and imdb_id and imdb_id != expected_imdb_id:
+                continue
+            score = score_wikidata_search_result(row, candidate, expected_imdb_id)
+            if poster_url:
+                score += 25
+            if imdb_id:
+                score += 25
+            if score > best_score and (poster_url or imdb_id):
+                best_score = score
+                best = {
+                    "imdb_url": f"{IMDB_BASE_URL}/title/{imdb_id}/" if imdb_id else "",
+                    "poster_url": poster_url,
+                }
+    return best
+
+
+def fetch_wikidata_metadata(title: str, imdb_url: str = "", query: str = "") -> dict[str, str]:
+    imdb_id = imdb_title_id_from_url(imdb_url)
+    if imdb_id:
+        metadata = fetch_wikidata_metadata_by_imdb_id(imdb_id)
+        if metadata.get("poster_url"):
+            return metadata
+    return fetch_wikidata_metadata_by_title(title, query, imdb_id)
+
+
 def discover_imdb_url(title: str) -> str:
     metadata = fetch_movie_metadata(title)
     return metadata.get("imdb_url", "")
@@ -471,7 +630,7 @@ def fetch_movie_metadata(title: str, imdb_url: str = "", query: str = "") -> dic
     title_id = imdb_title_id_from_url(imdb_url)
     if title_id:
         metadata = fetch_imdb_suggestion_metadata(title_id, title_id, expected_id=title_id)
-        if metadata.get("imdb_url"):
+        if metadata.get("poster_url"):
             return {
                 "imdb_url": metadata.get("imdb_url", ""),
                 "poster_url": metadata.get("poster_url", ""),
@@ -487,6 +646,13 @@ def fetch_movie_metadata(title: str, imdb_url: str = "", query: str = "") -> dic
             if score > best_score:
                 best = metadata
                 best_score = score
+    if not best.get("poster_url"):
+        fallback = fetch_wikidata_metadata(title, best.get("imdb_url") or imdb_url, query)
+        if fallback.get("poster_url") or fallback.get("imdb_url"):
+            best = {
+                "imdb_url": fallback.get("imdb_url") or best.get("imdb_url", ""),
+                "poster_url": fallback.get("poster_url") or best.get("poster_url", ""),
+            }
     return {
         "imdb_url": best.get("imdb_url", ""),
         "poster_url": best.get("poster_url", ""),
@@ -516,6 +682,29 @@ def refresh_item_metadata(db: "Database", item_id: int) -> dict[str, Any]:
         assert item is not None
 
     return {"item": item, "metadata_error": metadata_error}
+
+
+def metadata_attempt_is_recent(value: str, now: dt.datetime, max_age_hours: int = 24) -> bool:
+    parsed = parse_iso_datetime(value)
+    return parsed is not None and now - parsed < dt.timedelta(hours=max_age_hours)
+
+
+def refresh_missing_posters(db: "Database", limit: int = 20) -> int:
+    now = dt.datetime.now(dt.timezone.utc)
+    refreshed = 0
+    for item in db.list_items():
+        if refreshed >= limit:
+            break
+        if str(item.get("poster_url") or "").strip():
+            continue
+        if metadata_attempt_is_recent(str(item.get("poster_updated_at") or ""), now):
+            continue
+        try:
+            refresh_item_metadata(db, int(item["id"]))
+            refreshed += 1
+        except Exception as exc:
+            print(f"Poster refresh failed for item {item.get('id')}: {exc}")
+    return refreshed
 
 
 class Database:
@@ -1189,6 +1378,8 @@ class UiSessionRegistry:
 
 UI_SESSIONS = UiSessionRegistry()
 SERVER: ThreadingHTTPServer | None = None
+METADATA_BACKFILL_STARTED = False
+METADATA_BACKFILL_LOCK = threading.Lock()
 
 
 def request_shutdown(reason: str = "requested") -> None:
@@ -1200,6 +1391,24 @@ def request_shutdown(reason: str = "requested") -> None:
             SERVER.shutdown()
 
     threading.Thread(target=stop, daemon=True).start()
+
+
+def start_metadata_backfill() -> None:
+    global METADATA_BACKFILL_STARTED
+    with METADATA_BACKFILL_LOCK:
+        if METADATA_BACKFILL_STARTED:
+            return
+        METADATA_BACKFILL_STARTED = True
+
+    def worker() -> None:
+        try:
+            count = refresh_missing_posters(DB)
+            if count:
+                print(f"Poster backfill refreshed {count} item(s)")
+        except Exception as exc:
+            print(f"Poster backfill failed: {exc}")
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 def parse_iso_datetime(value: str | None) -> dt.datetime | None:
@@ -1322,6 +1531,7 @@ class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         try:
             if self.path == "/" or self.path.startswith("/?"):
+                start_metadata_backfill()
                 index = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
                 self.send_text(index, content_type="text/html")
                 return

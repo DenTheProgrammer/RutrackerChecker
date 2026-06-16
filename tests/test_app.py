@@ -357,6 +357,71 @@ class DatabaseTests(unittest.TestCase):
             "https://m.media-amazon.com/images/M/odyssey.jpg",
         )
 
+    def test_fetch_movie_metadata_falls_back_to_wikidata_by_imdb_id(self):
+        def fake_fetch_json(url):
+            if "query.wikidata.org" in url:
+                return {
+                    "results": {
+                        "bindings": [
+                            {
+                                "image": {
+                                    "value": "https://commons.wikimedia.org/wiki/Special:FilePath/Drama_poster.jpg"
+                                }
+                            }
+                        ]
+                    }
+                }
+            return {"d": []}
+
+        with patch("app.fetch_json", side_effect=fake_fetch_json):
+            metadata = fetch_movie_metadata("Drama", "https://www.imdb.com/title/tt1234567/")
+
+        self.assertEqual(metadata["imdb_url"], "https://www.imdb.com/title/tt1234567/")
+        self.assertEqual(
+            metadata["poster_url"],
+            "https://commons.wikimedia.org/wiki/Special:FilePath/Drama_poster.jpg",
+        )
+
+    def test_refresh_missing_posters_updates_only_items_without_posters(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            missing = db.create_item({"title": "Drama", "query": "Drama 2026"})
+            existing = db.create_item(
+                {
+                    "title": "Dune",
+                    "query": "Dune 2026",
+                    "poster_url": "https://example.com/dune.jpg",
+                }
+            )
+
+            refreshed_ids = []
+
+            def fake_refresh(db_arg, item_id):
+                refreshed_ids.append(item_id)
+                return {
+                    "item": db_arg.update_item_metadata(
+                        item_id,
+                        "",
+                        f"https://example.com/{item_id}.jpg",
+                    ),
+                    "metadata_error": "",
+                }
+
+            with patch("app.refresh_item_metadata", side_effect=fake_refresh):
+                count = app.refresh_missing_posters(db)
+
+            self.assertEqual(count, 1)
+            self.assertEqual(refreshed_ids, [missing["id"]])
+            self.assertEqual(
+                db.get_item(missing["id"])["poster_url"],
+                f"https://example.com/{missing['id']}.jpg",
+            )
+            self.assertEqual(
+                db.get_item(existing["id"])["poster_url"],
+                "https://example.com/dune.jpg",
+            )
+            db.close()
+
     def test_create_item_api_requires_rutracker_credentials(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / "app.db")
