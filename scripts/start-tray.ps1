@@ -5,12 +5,33 @@ Add-Type -AssemblyName System.Drawing
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Root = Split-Path -Parent $ScriptDir
+$AssetsDir = Join-Path $Root "assets"
+$BaseIconPath = Join-Path $AssetsDir "app-icon.png"
 $DataDir = Join-Path $Root "data"
 $RuntimeStatusPath = Join-Path $DataDir "runtime_status.json"
 $AppExe = Join-Path $Root "RutrackerChecker.exe"
 $AppUrl = "http://127.0.0.1:9876/"
 $BundledPython = Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
 $Python = $null
+$TrayMutexName = "Local\RutrackerCheckerTray"
+$TrayMutexCreated = $false
+$TrayMutex = New-Object System.Threading.Mutex($true, $TrayMutexName, [ref]$TrayMutexCreated)
+
+if (-not $TrayMutexCreated) {
+    $TrayMutex.Dispose()
+    exit 0
+}
+
+if (-not ("NativeIconMethods" -as [type])) {
+    Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class NativeIconMethods {
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool DestroyIcon(IntPtr hIcon);
+}
+"@
+}
 
 function Find-Python {
     try {
@@ -31,10 +52,6 @@ function Test-ProcessCommandLine {
             $_.CommandLine -like $Pattern -and
             $_.CommandLine -like "*$Root*"
         }).Count -gt 0
-}
-
-if (Test-ProcessCommandLine "*start-tray.ps1*") {
-    exit 0
 }
 
 $Python = Find-Python
@@ -114,50 +131,60 @@ function New-AppIcon {
     $Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
     $Graphics.Clear([System.Drawing.Color]::Transparent)
 
-    $BackBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 23, 32, 51))
-    $FilmBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 246, 248, 252))
-    $HoleBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 23, 32, 51))
+    if (Test-Path $BaseIconPath) {
+        $BaseImage = [System.Drawing.Image]::FromFile($BaseIconPath)
+        $Graphics.DrawImage($BaseImage, 0, 0, 64, 64)
+        $BaseImage.Dispose()
+    } else {
+        $BackBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 23, 32, 51))
+        $FilmBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 246, 248, 252))
+        $HoleBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 23, 32, 51))
+        $Graphics.FillEllipse($BackBrush, 3, 3, 58, 58)
+        $Graphics.FillRectangle($FilmBrush, 16, 13, 32, 38)
+        foreach ($Y in @(18, 27, 36, 45)) {
+            $Graphics.FillRectangle($HoleBrush, 19, $Y, 5, 4)
+            $Graphics.FillRectangle($HoleBrush, 40, $Y, 5, 4)
+        }
+        $BackBrush.Dispose()
+        $FilmBrush.Dispose()
+        $HoleBrush.Dispose()
+    }
+
     $AccentColor = switch ($State) {
-        "running" { [System.Drawing.Color]::FromArgb(255, 15, 107, 88) }
-        "paused" { [System.Drawing.Color]::FromArgb(255, 194, 65, 12) }
-        "stale" { [System.Drawing.Color]::FromArgb(255, 180, 35, 24) }
+        "running" { [System.Drawing.Color]::FromArgb(255, 34, 197, 94) }
+        "paused" { [System.Drawing.Color]::FromArgb(255, 245, 158, 11) }
+        "stale" { [System.Drawing.Color]::FromArgb(255, 239, 68, 68) }
         default { [System.Drawing.Color]::FromArgb(255, 102, 112, 133) }
     }
     $AccentBrush = New-Object System.Drawing.SolidBrush $AccentColor
-    $AccentPen = New-Object System.Drawing.Pen ([System.Drawing.Color]::White), 5
+    $BorderBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 255, 255, 255))
+    $GlyphBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::White)
+    $GlyphPen = New-Object System.Drawing.Pen ([System.Drawing.Color]::White), 4
 
-    $Graphics.FillEllipse($BackBrush, 3, 3, 58, 58)
-    $Graphics.FillRectangle($FilmBrush, 16, 13, 32, 38)
-    foreach ($Y in @(18, 27, 36, 45)) {
-        $Graphics.FillRectangle($HoleBrush, 19, $Y, 5, 4)
-        $Graphics.FillRectangle($HoleBrush, 40, $Y, 5, 4)
-    }
-    $Graphics.FillEllipse($AccentBrush, 31, 31, 25, 25)
+    $Graphics.FillEllipse($BorderBrush, 38, 38, 24, 24)
+    $Graphics.FillEllipse($AccentBrush, 41, 41, 18, 18)
     if ($State -eq "paused") {
-        $PauseBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::White)
-        $Graphics.FillRectangle($PauseBrush, 39, 38, 4, 12)
-        $Graphics.FillRectangle($PauseBrush, 47, 38, 4, 12)
-        $PauseBrush.Dispose()
+        $Graphics.FillRectangle($GlyphBrush, 46, 46, 3, 9)
+        $Graphics.FillRectangle($GlyphBrush, 52, 46, 3, 9)
     } elseif ($State -eq "stale") {
-        $CrossPen = New-Object System.Drawing.Pen ([System.Drawing.Color]::White), 5
-        $Graphics.DrawLine($CrossPen, 39, 39, 51, 51)
-        $Graphics.DrawLine($CrossPen, 51, 39, 39, 51)
-        $CrossPen.Dispose()
+        $Graphics.DrawLine($GlyphPen, 46, 46, 55, 55)
+        $Graphics.DrawLine($GlyphPen, 55, 46, 46, 55)
     } else {
-        $Graphics.DrawLines($AccentPen, @(
-            [System.Drawing.Point]::new(38, 44),
-            [System.Drawing.Point]::new(44, 50),
-            [System.Drawing.Point]::new(53, 38)
+        $Graphics.DrawLines($GlyphPen, @(
+            [System.Drawing.Point]::new(45, 51),
+            [System.Drawing.Point]::new(49, 55),
+            [System.Drawing.Point]::new(56, 46)
         ))
     }
 
-    $Icon = [System.Drawing.Icon]::FromHandle($Bitmap.GetHicon())
+    $Handle = $Bitmap.GetHicon()
+    $Icon = ([System.Drawing.Icon]::FromHandle($Handle)).Clone()
+    [NativeIconMethods]::DestroyIcon($Handle) | Out-Null
     $Graphics.Dispose()
-    $BackBrush.Dispose()
-    $FilmBrush.Dispose()
-    $HoleBrush.Dispose()
     $AccentBrush.Dispose()
-    $AccentPen.Dispose()
+    $BorderBrush.Dispose()
+    $GlyphBrush.Dispose()
+    $GlyphPen.Dispose()
     $Bitmap.Dispose()
     return $Icon
 }
@@ -209,36 +236,9 @@ function Format-Relative {
     return "$Text ago"
 }
 
-Start-BackgroundLoop
-
-$NotifyIcon = New-Object System.Windows.Forms.NotifyIcon
-$NotifyIcon.Text = "RuTracker Checker"
-$NotifyIcon.Visible = $true
-$NotifyIcon.Icon = New-AppIcon "stale"
-
-$Menu = New-Object System.Windows.Forms.ContextMenuStrip
-$StatusItem = $Menu.Items.Add("Starting background checker...")
-$StatusItem.Enabled = $false
-$Menu.Items.Add("-") | Out-Null
-$OpenItem = $Menu.Items.Add("Open UI")
-$CheckItem = $Menu.Items.Add("Check now")
-$PauseItem = $Menu.Items.Add("Pause background checks")
-$ResumeItem = $Menu.Items.Add("Resume background checks")
-$RefreshItem = $Menu.Items.Add("Refresh status")
-$Menu.Items.Add("-") | Out-Null
-$ExitItem = $Menu.Items.Add("Exit tray icon")
-$NotifyIcon.ContextMenuStrip = $Menu
-
-$OpenItem.Add_Click({ Open-Ui })
-$NotifyIcon.Add_DoubleClick({ Open-Ui })
-$CheckItem.Add_Click({ Invoke-CheckNow })
-$PauseItem.Add_Click({ Set-BackgroundEnabled $false })
-$ResumeItem.Add_Click({ Set-BackgroundEnabled $true; Start-BackgroundLoop })
-$RefreshItem.Add_Click({ Update-Tray })
-$ExitItem.Add_Click({
-    $NotifyIcon.Visible = $false
-    [System.Windows.Forms.Application]::Exit()
-})
+$NotifyIcon = $null
+$Menu = $null
+$Timer = $null
 
 function Update-Tray {
     $State = Get-StateName
@@ -247,9 +247,9 @@ function Update-Tray {
     }
     $Status = Get-RuntimeStatus
     $Title = switch ($State) {
-        "running" { "RuTracker Checker - running" }
-        "paused" { "RuTracker Checker - manual only" }
-        "stale" { "RuTracker Checker - not detected" }
+        "running" { "RuTracker Checker: running" }
+        "paused" { "RuTracker Checker: manual only" }
+        "stale" { "RuTracker Checker: not detected" }
         default { "RuTracker Checker" }
     }
 
@@ -268,10 +268,62 @@ function Update-Tray {
     $ResumeItem.Visible = $State -eq "paused"
 }
 
-$Timer = New-Object System.Windows.Forms.Timer
-$Timer.Interval = 15000
-$Timer.Add_Tick({ Update-Tray })
-$Timer.Start()
-Update-Tray
+try {
+    Start-BackgroundLoop
 
-[System.Windows.Forms.Application]::Run()
+    $NotifyIcon = New-Object System.Windows.Forms.NotifyIcon
+    $NotifyIcon.Text = "RuTracker Checker"
+    $NotifyIcon.Visible = $true
+    $NotifyIcon.Icon = New-AppIcon "stale"
+
+    $Menu = New-Object System.Windows.Forms.ContextMenuStrip
+    $StatusItem = $Menu.Items.Add("Starting background checker...")
+    $StatusItem.Enabled = $false
+    $Menu.Items.Add("-") | Out-Null
+    $OpenItem = $Menu.Items.Add("Open UI")
+    $CheckItem = $Menu.Items.Add("Check now")
+    $PauseItem = $Menu.Items.Add("Pause background checks")
+    $ResumeItem = $Menu.Items.Add("Resume background checks")
+    $RefreshItem = $Menu.Items.Add("Refresh status")
+    $Menu.Items.Add("-") | Out-Null
+    $ExitItem = $Menu.Items.Add("Exit tray icon")
+    $NotifyIcon.ContextMenuStrip = $Menu
+
+    $OpenItem.Add_Click({ Open-Ui })
+    $NotifyIcon.Add_DoubleClick({ Open-Ui })
+    $CheckItem.Add_Click({ Invoke-CheckNow })
+    $PauseItem.Add_Click({ Set-BackgroundEnabled $false })
+    $ResumeItem.Add_Click({ Set-BackgroundEnabled $true; Start-BackgroundLoop })
+    $RefreshItem.Add_Click({ Update-Tray })
+    $ExitItem.Add_Click({
+        $NotifyIcon.Visible = $false
+        [System.Windows.Forms.Application]::Exit()
+    })
+
+    $Timer = New-Object System.Windows.Forms.Timer
+    $Timer.Interval = 15000
+    $Timer.Add_Tick({ Update-Tray })
+    $Timer.Start()
+    Update-Tray
+
+    [System.Windows.Forms.Application]::Run()
+} finally {
+    if ($Timer) {
+        $Timer.Stop()
+        $Timer.Dispose()
+    }
+    if ($NotifyIcon) {
+        $NotifyIcon.Visible = $false
+        if ($NotifyIcon.Icon) {
+            $NotifyIcon.Icon.Dispose()
+        }
+        $NotifyIcon.Dispose()
+    }
+    if ($Menu) {
+        $Menu.Dispose()
+    }
+    if ($TrayMutex) {
+        $TrayMutex.ReleaseMutex()
+        $TrayMutex.Dispose()
+    }
+}

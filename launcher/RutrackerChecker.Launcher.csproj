@@ -6,5 +6,6 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>RutrackerChecker</AssemblyName>
+    <ApplicationIcon>..\assets\app-icon.ico</ApplicationIcon>
   </PropertyGroup>
 </Project>
