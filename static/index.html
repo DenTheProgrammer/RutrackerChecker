@@ -7,131 +7,183 @@
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-  <header class="topbar">
-    <div>
-      <h1>RuTracker Release Checker</h1>
-      <p id="statusLine">Loading...</p>
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-mark">RC</div>
+      <div>
+        <h1>RuTracker Release Checker</h1>
+        <p id="statusLine">Загрузка...</p>
+      </div>
     </div>
-    <div class="top-actions">
-      <button id="checkAllButton" class="primary">Check all</button>
+
+    <div class="header-actions">
+      <button id="themeToggle" class="icon-button" type="button" aria-label="Переключить тему" title="Переключить тему">
+        <span data-icon="moon"></span>
+      </button>
+      <button id="settingsToggle" class="ghost-button" type="button">
+        <span data-icon="settings"></span>
+        Настройки
+      </button>
+      <button id="checkAllButton" class="primary-button" type="button">
+        <span data-icon="refresh"></span>
+        Проверить все
+      </button>
+      <button id="stopServerButton" class="danger-button" type="button">
+        <span data-icon="power"></span>
+      </button>
     </div>
   </header>
 
-  <main>
-    <section class="panel runtime-panel" id="runtimePanel">
-      <div class="runtime-main">
+  <main class="app-shell">
+    <section class="runtime-strip" id="runtimePanel">
+      <div class="runtime-state">
         <span class="status-dot" id="runtimeDot"></span>
         <div>
-          <h2 id="runtimeTitle">Checking status...</h2>
-          <p id="runtimeSummary">Loading background state.</p>
+          <strong id="runtimeTitle">Проверяем статус...</strong>
+          <span id="runtimeSummary">Загрузка фонового процесса.</span>
         </div>
       </div>
-      <div class="runtime-grid">
+      <div class="runtime-metrics">
         <div>
-          <span>Next check</span>
+          <span>Следующая проверка</span>
           <strong id="nextCheckTime">-</strong>
         </div>
         <div>
-          <span>Next reminder</span>
+          <span>Напоминание</span>
           <strong id="nextReminderTime">-</strong>
         </div>
         <div>
-          <span>Last check</span>
+          <span>Последняя проверка</span>
           <strong id="lastCheckTime">-</strong>
         </div>
       </div>
     </section>
 
-    <section class="panel settings-panel">
-      <div class="section-heading">
-        <h2>Settings</h2>
-        <span id="settingsState"></span>
-      </div>
+    <section class="settings-drawer" id="settingsDrawer" hidden>
       <form id="settingsForm" class="settings-form">
+        <div class="drawer-heading">
+          <h2>Настройки</h2>
+          <span id="settingsState"></span>
+        </div>
         <label>
-          <span>RuTracker username</span>
+          <span>RuTracker логин</span>
           <input name="rutracker_username" autocomplete="username" placeholder="login">
         </label>
         <label>
-          <span>RuTracker password</span>
-          <input name="rutracker_password" type="password" autocomplete="current-password" placeholder="Leave empty to keep saved">
+          <span>RuTracker пароль</span>
+          <input name="rutracker_password" type="password" autocomplete="current-password" placeholder="Оставьте пустым">
         </label>
         <label>
-          <span>Telegram bot token</span>
-          <input name="telegram_bot_token" type="password" placeholder="Optional">
+          <span>Telegram token</span>
+          <input name="telegram_bot_token" type="password" placeholder="Опционально">
         </label>
         <label>
           <span>Telegram chat id</span>
-          <input name="telegram_chat_id" placeholder="Optional">
+          <input name="telegram_chat_id" placeholder="Опционально">
         </label>
-        <label class="small-field">
-          <span>Default seeders</span>
+        <label>
+          <span>Сиды</span>
           <input name="default_min_seeders" type="number" min="0" value="5">
         </label>
-        <label class="small-field">
-          <span>Default GB</span>
+        <label>
+          <span>GB</span>
           <input name="default_min_size_gb" type="number" min="0" step="0.1" value="5">
         </label>
-        <label class="checkbox-field">
-          <input name="default_require_1080p" type="checkbox" checked>
-          <span>Require 1080p+</span>
-        </label>
-        <label class="checkbox-field">
-          <input name="background_enabled" type="checkbox" checked>
-          <span>Keep checking in background</span>
-        </label>
-        <label class="small-field">
-          <span>Check interval</span>
+        <label>
+          <span>Интервал, мин</span>
           <input name="check_interval_minutes" type="number" min="0" value="360">
         </label>
-        <label class="small-field">
-          <span>Reminder interval (hours)</span>
+        <label>
+          <span>Напоминание, ч</span>
           <input name="reminder_interval_hours" type="number" min="0" value="12">
         </label>
-        <label class="small-field">
-          <span>Search pages</span>
+        <label>
+          <span>Страниц</span>
           <input name="max_search_pages" type="number" min="1" max="10" value="3">
         </label>
-        <button type="submit">Save settings</button>
+        <label class="switch-field">
+          <input name="default_require_1080p" type="checkbox" checked>
+          <span>1080p+</span>
+        </label>
+        <label class="switch-field">
+          <input name="background_enabled" type="checkbox" checked>
+          <span>Фон</span>
+        </label>
+        <button class="primary-button" type="submit">
+          <span data-icon="save"></span>
+          Сохранить
+        </button>
       </form>
     </section>
 
-    <section class="panel">
-      <form id="addForm" class="add-form">
-        <label>
-          <span>Search query</span>
-          <input name="query" placeholder="Drama 2026" required>
+    <section class="shelf-heading">
+      <div>
+        <h2>Отслеживаемые фильмы</h2>
+        <p id="shelfSummary">Добавьте первый поиск или выберите карточку для открытия RuTracker.</p>
+      </div>
+      <div class="shelf-tools">
+        <button id="manualAddButton" class="ghost-button" type="button">
+          <span data-icon="plus"></span>
+          Добавить
+        </button>
+      </div>
+    </section>
+
+    <section id="cardGrid" class="card-grid" aria-live="polite"></section>
+  </main>
+
+  <div id="movieModal" class="modal-backdrop" hidden>
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <button id="modalCloseButton" class="modal-close icon-button" type="button" aria-label="Закрыть">
+        <span data-icon="x"></span>
+      </button>
+      <div class="modal-heading">
+        <h2 id="modalTitle">Новый фильм</h2>
+        <p>Название для карточки, поисковая фраза RuTracker и опциональная IMDb-ссылка для постера.</p>
+      </div>
+      <form id="movieForm" class="movie-form">
+        <input name="id" type="hidden">
+        <label class="wide">
+          <span>Название</span>
+          <input name="title" placeholder="Dune: Part Three">
         </label>
-        <label class="small-field">
-          <span>Min seeders</span>
+        <label class="wide">
+          <span>Поиск RuTracker</span>
+          <input name="query" placeholder="dune part three 2026" required>
+        </label>
+        <label class="wide">
+          <span>IMDb ссылка</span>
+          <input name="imdb_url" inputmode="url" placeholder="https://www.imdb.com/title/tt.../">
+        </label>
+        <label>
+          <span>Мин. сидов</span>
           <input name="min_seeders" type="number" min="0" value="5">
         </label>
-        <label class="small-field">
-          <span>Min GB</span>
+        <label>
+          <span>Мин. GB</span>
           <input name="min_size_gb" type="number" min="0" step="0.1" value="5">
         </label>
-        <label class="checkbox-field">
+        <label class="switch-field">
           <input name="require_1080p" type="checkbox" checked>
-          <span>Require 1080p+</span>
+          <span>Только 1080p+</span>
         </label>
-        <button type="submit">Add</button>
+        <label class="switch-field">
+          <input name="enabled" type="checkbox" checked>
+          <span>Включено</span>
+        </label>
+        <div class="modal-actions wide">
+          <button id="metadataButton" class="ghost-button" type="button">
+            <span data-icon="image"></span>
+            Обновить постер
+          </button>
+          <button class="primary-button" type="submit">
+            <span data-icon="save"></span>
+            Сохранить
+          </button>
+        </div>
       </form>
     </section>
-
-    <section class="workspace">
-      <aside class="sidebar panel">
-        <div class="sidebar-heading">
-          <h2>Queries</h2>
-          <span id="queryCount"></span>
-        </div>
-        <div id="itemList" class="item-list"></div>
-      </aside>
-
-      <section id="detailPanel" class="detail panel">
-        <div class="empty-detail">Select a query.</div>
-      </section>
-    </section>
-  </main>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>

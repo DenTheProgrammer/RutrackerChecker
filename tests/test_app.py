@@ -1,18 +1,22 @@
 import tempfile
 import unittest
 import datetime as dt
+import sqlite3
 from pathlib import Path
+from unittest.mock import patch
 
 from check_once import build_notification
 from app import (
     Database,
     RuTrackerClient,
     SearchResult,
+    fetch_movie_metadata,
     filter_results,
     parse_rutracker_results,
     parse_next_page_url,
     parse_resolution,
     quote_rutracker_query,
+    refresh_item_metadata,
 )
 
 
@@ -202,6 +206,115 @@ class NotificationTests(unittest.TestCase):
 
 
 class DatabaseTests(unittest.TestCase):
+    def test_existing_database_gets_metadata_columns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "app.db"
+            connection = sqlite3.connect(db_path)
+            connection.executescript(
+                """
+                CREATE TABLE items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    query TEXT NOT NULL,
+                    min_seeders INTEGER NOT NULL DEFAULT 5,
+                    min_size_gb REAL NOT NULL DEFAULT 5,
+                    require_1080p INTEGER NOT NULL DEFAULT 1,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+                    topic_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    resolution TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL DEFAULT 0,
+                    size_label TEXT NOT NULL DEFAULT '',
+                    seeders INTEGER NOT NULL DEFAULT 0,
+                    is_new INTEGER NOT NULL DEFAULT 1,
+                    first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(item_id, topic_id)
+                );
+
+                CREATE TABLE settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                """
+            )
+            connection.commit()
+            connection.close()
+
+            db = Database(db_path)
+            columns = {
+                row[1]
+                for row in db.conn().execute("PRAGMA table_info(items)").fetchall()
+            }
+
+            self.assertIn("imdb_url", columns)
+            self.assertIn("poster_url", columns)
+            self.assertIn("poster_updated_at", columns)
+            db.close()
+
+    def test_item_metadata_fields_are_saved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+
+            item = db.create_item(
+                {
+                    "title": "Dune: Part Three",
+                    "query": "dune part three 2026",
+                    "imdb_url": "https://www.imdb.com/title/tt1234567/?ref_=fn",
+                    "poster_url": "https://m.media-amazon.com/images/M/poster.jpg",
+                }
+            )
+            updated = db.update_item(
+                item["id"],
+                {
+                    **item,
+                    "imdb_url": "https://www.imdb.com/title/tt7654321/",
+                    "poster_url": "https://m.media-amazon.com/images/M/poster-2.jpg",
+                },
+            )
+
+            self.assertEqual(updated["imdb_url"], "https://www.imdb.com/title/tt7654321/")
+            self.assertEqual(
+                updated["poster_url"],
+                "https://m.media-amazon.com/images/M/poster-2.jpg",
+            )
+            self.assertTrue(updated["poster_updated_at"])
+            db.close()
+
+    def test_refresh_metadata_keeps_item_usable_on_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            item = db.create_item({"title": "Drama", "query": "Drama 2026"})
+
+            with patch("app.fetch_movie_metadata", side_effect=RuntimeError("IMDb unavailable")):
+                payload = refresh_item_metadata(db, item["id"])
+
+            self.assertEqual(payload["item"]["id"], item["id"])
+            self.assertEqual(payload["item"]["poster_url"], "")
+            self.assertIn("IMDb unavailable", payload["metadata_error"])
+            db.close()
+
+    def test_fetch_movie_metadata_reads_imdb_meta_poster(self):
+        html = '<meta property="og:image" content="https://m.media-amazon.com/images/M/poster.jpg">'
+
+        with patch("app.fetch_html", return_value=html):
+            metadata = fetch_movie_metadata("Drama", "https://www.imdb.com/title/tt1234567/")
+
+        self.assertEqual(metadata["imdb_url"], "https://www.imdb.com/title/tt1234567/")
+        self.assertEqual(
+            metadata["poster_url"],
+            "https://m.media-amazon.com/images/M/poster.jpg",
+        )
+
     def test_result_insert_is_idempotent_and_reset_keeps_history(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / "app.db")

@@ -1,11 +1,19 @@
-const itemListEl = document.querySelector("#itemList");
-const detailPanel = document.querySelector("#detailPanel");
-const queryCount = document.querySelector("#queryCount");
-const addForm = document.querySelector("#addForm");
+const cardGrid = document.querySelector("#cardGrid");
+const settingsDrawer = document.querySelector("#settingsDrawer");
+const settingsToggle = document.querySelector("#settingsToggle");
+const themeToggle = document.querySelector("#themeToggle");
+const manualAddButton = document.querySelector("#manualAddButton");
+const movieModal = document.querySelector("#movieModal");
+const movieForm = document.querySelector("#movieForm");
+const modalTitle = document.querySelector("#modalTitle");
+const modalCloseButton = document.querySelector("#modalCloseButton");
+const metadataButton = document.querySelector("#metadataButton");
 const settingsForm = document.querySelector("#settingsForm");
 const settingsState = document.querySelector("#settingsState");
+const shelfSummary = document.querySelector("#shelfSummary");
 const statusLine = document.querySelector("#statusLine");
 const checkAllButton = document.querySelector("#checkAllButton");
+const stopServerButton = document.querySelector("#stopServerButton");
 const runtimePanel = document.querySelector("#runtimePanel");
 const runtimeDot = document.querySelector("#runtimeDot");
 const runtimeTitle = document.querySelector("#runtimeTitle");
@@ -15,11 +23,39 @@ const nextReminderTime = document.querySelector("#nextReminderTime");
 const lastCheckTime = document.querySelector("#lastCheckTime");
 
 let state = { items: [], config: {}, runtime: {} };
-let selectedId = null;
 let lastChecks = new Map();
+
 const sessionId = crypto.randomUUID
   ? crypto.randomUUID()
   : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+const icons = {
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  edit: '<path d="m16 3 5 5L8 21H3v-5L16 3Z"/><path d="m14 5 5 5"/>',
+  external: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>',
+  image: '<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
+  moon: '<path d="M12 3a6 6 0 0 0 9 7.5A9 9 0 1 1 12 3Z"/>',
+  plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
+  power: '<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/>',
+  refresh: '<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12A9 9 0 0 1 18.5 5.8L21 8"/><path d="M21 3v5h-5"/>',
+  reset: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
+  save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  settings: '<path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1A2 2 0 1 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+  trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+};
+
+function icon(name) {
+  return `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${icons[name] || ""}</svg>`;
+}
+
+function hydrateIcons(root = document) {
+  root.querySelectorAll("[data-icon]").forEach((node) => {
+    node.innerHTML = icon(node.dataset.icon);
+  });
+}
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -28,7 +64,7 @@ async function api(path, options = {}) {
   });
   const payload = await response.json();
   if (!response.ok) {
-    throw new Error(payload.error || "Request failed");
+    throw new Error(payload.error || "Запрос не выполнен");
   }
   return payload;
 }
@@ -36,7 +72,15 @@ async function api(path, options = {}) {
 function setBusy(button, busy, text) {
   if (!button) return;
   button.disabled = busy;
-  if (text) button.textContent = text;
+  if (busy && text) {
+    button.dataset.originalHtml ||= button.innerHTML;
+    button.textContent = text;
+  }
+  if (!busy && button.dataset.originalHtml) {
+    button.innerHTML = button.dataset.originalHtml;
+    delete button.dataset.originalHtml;
+    hydrateIcons(button);
+  }
 }
 
 function parseDate(value) {
@@ -48,9 +92,9 @@ function parseDate(value) {
 function formatClock(value) {
   const date = parseDate(value);
   if (!date) return "-";
-  return date.toLocaleString([], {
+  return date.toLocaleString("ru-RU", {
+    day: "2-digit",
     month: "short",
-    day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
   });
@@ -61,19 +105,66 @@ function formatRelative(value) {
   if (!date) return "-";
   const deltaSeconds = Math.round((date.getTime() - Date.now()) / 1000);
   const absSeconds = Math.abs(deltaSeconds);
-  if (absSeconds < 45) return deltaSeconds >= 0 ? "now" : "just now";
+  if (absSeconds < 45) return deltaSeconds >= 0 ? "сейчас" : "только что";
   const minutes = Math.round(absSeconds / 60);
   const hours = Math.floor(minutes / 60);
   const days = Math.floor(hours / 24);
   let text;
   if (days > 0) {
-    text = `${days}d ${hours % 24}h`;
+    text = `${days} д ${hours % 24} ч`;
   } else if (hours > 0) {
-    text = `${hours}h ${minutes % 60}m`;
+    text = `${hours} ч ${minutes % 60} м`;
   } else {
-    text = `${minutes}m`;
+    text = `${minutes} м`;
   }
-  return deltaSeconds >= 0 ? `in ${text}` : `${text} ago`;
+  return deltaSeconds >= 0 ? `через ${text}` : `${text} назад`;
+}
+
+function applyTheme(theme = localStorage.getItem("theme") || "dark") {
+  document.body.classList.toggle("light", theme === "light");
+  localStorage.setItem("theme", theme);
+  const nextIcon = theme === "light" ? "moon" : "sun";
+  themeToggle.innerHTML = icon(nextIcon);
+  themeToggle.title = theme === "light" ? "Темная тема" : "Светлая тема";
+}
+
+function posterFallback(title) {
+  const words = String(title || "Movie")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(" ");
+  const wrapper = document.createElement("div");
+  wrapper.className = "fallback-poster";
+  const text = document.createElement("strong");
+  text.textContent = words || "Movie";
+  wrapper.append(text);
+  return wrapper;
+}
+
+function applySettingsToForms() {
+  const config = state.config || {};
+  statusLine.textContent = `Автопроверка каждые ${config.check_interval_minutes || 0} мин · Telegram ${config.telegram_enabled ? "подключен" : "не настроен"}`;
+  settingsState.textContent = config.has_rutracker_password
+    ? "RuTracker сохранен"
+    : "Введите RuTracker логин и пароль";
+  settingsForm.rutracker_username.value = config.rutracker_username || "";
+  settingsForm.rutracker_password.value = "";
+  settingsForm.rutracker_password.placeholder = config.has_rutracker_password
+    ? "Сохранен · пусто = не менять"
+    : "Обязательно";
+  settingsForm.telegram_bot_token.value = "";
+  settingsForm.telegram_bot_token.placeholder = config.has_telegram_bot_token
+    ? "Сохранен · пусто = не менять"
+    : "Опционально";
+  settingsForm.telegram_chat_id.value = config.telegram_chat_id || "";
+  settingsForm.default_min_seeders.value = config.default_min_seeders ?? 5;
+  settingsForm.default_min_size_gb.value = config.default_min_size_gb ?? 5;
+  settingsForm.default_require_1080p.checked = Boolean(config.default_require_1080p);
+  settingsForm.background_enabled.checked = Boolean(config.background_enabled);
+  settingsForm.check_interval_minutes.value = config.check_interval_minutes ?? 360;
+  settingsForm.reminder_interval_hours.value = config.reminder_interval_hours ?? 12;
+  settingsForm.max_search_pages.value = config.max_search_pages ?? 3;
 }
 
 function renderRuntime() {
@@ -82,22 +173,22 @@ function renderRuntime() {
 
   if (!runtime.background_enabled) {
     runtimePanel.classList.add("paused");
-    runtimeTitle.textContent = "Manual only";
-    runtimeSummary.textContent = "Background checks are paused. Manual checks still work.";
+    runtimeTitle.textContent = "Только вручную";
+    runtimeSummary.textContent = "Фоновая проверка выключена, ручные проверки работают.";
   } else if (runtime.background_running) {
     runtimePanel.classList.add("running");
-    runtimeTitle.textContent = "Background running";
-    runtimeSummary.textContent = `${runtime.pending_new_count || 0} pending release(s). Checks run every ${runtime.check_interval_minutes || 0} min.`;
+    runtimeTitle.textContent = "Фон работает";
+    runtimeSummary.textContent = `${runtime.pending_new_count || 0} новых релизов ждут просмотра.`;
   } else {
     runtimePanel.classList.add("stale");
-    runtimeTitle.textContent = "Background not detected";
-    runtimeSummary.textContent = "Start the background checker or reinstall the startup shortcut.";
+    runtimeTitle.textContent = "Фон не найден";
+    runtimeSummary.textContent = "Запустите фоновой чекер или переустановите автозапуск.";
   }
 
   runtimeDot.title = runtimeTitle.textContent;
   if (!runtime.background_enabled) {
-    nextCheckTime.textContent = "manual only";
-    nextReminderTime.textContent = "manual only";
+    nextCheckTime.textContent = "вручную";
+    nextReminderTime.textContent = "вручную";
   } else {
     nextCheckTime.textContent = runtime.next_check_at
       ? `${formatRelative(runtime.next_check_at)} (${formatClock(runtime.next_check_at)})`
@@ -105,7 +196,7 @@ function renderRuntime() {
     nextReminderTime.textContent = runtime.next_reminder_at
       ? `${formatRelative(runtime.next_reminder_at)} (${formatClock(runtime.next_reminder_at)})`
       : runtime.pending_new_count > 0 && runtime.reminder_interval_hours <= 0
-        ? "disabled"
+        ? "выключено"
         : "-";
   }
   lastCheckTime.textContent = runtime.last_check_at
@@ -113,234 +204,233 @@ function renderRuntime() {
     : "-";
 }
 
-function applySettingsToForms() {
-  const { config } = state;
-  statusLine.textContent = `Auto-check every ${config.check_interval_minutes} min · Telegram ${config.telegram_enabled ? "enabled" : "not configured"}`;
-  settingsState.textContent = config.has_rutracker_password
-    ? "RuTracker credentials saved"
-    : "Enter RuTracker credentials before checking";
-  settingsForm.rutracker_username.value = config.rutracker_username || "";
-  settingsForm.rutracker_password.value = "";
-  settingsForm.rutracker_password.placeholder = config.has_rutracker_password
-    ? "Saved · leave empty to keep"
-    : "Required";
-  settingsForm.telegram_bot_token.value = "";
-  settingsForm.telegram_bot_token.placeholder = config.has_telegram_bot_token
-    ? "Saved · leave empty to keep"
-    : "Optional";
-  settingsForm.telegram_chat_id.value = config.telegram_chat_id || "";
-  settingsForm.default_min_seeders.value = config.default_min_seeders || 5;
-  settingsForm.default_min_size_gb.value = config.default_min_size_gb || 5;
-  settingsForm.default_require_1080p.checked = Boolean(config.default_require_1080p);
-  settingsForm.background_enabled.checked = Boolean(config.background_enabled);
-  settingsForm.check_interval_minutes.value = config.check_interval_minutes || 360;
-  settingsForm.reminder_interval_hours.value = config.reminder_interval_hours ?? 12;
-  settingsForm.max_search_pages.value = config.max_search_pages || 3;
-  addForm.require_1080p.checked = Boolean(config.default_require_1080p);
+function renderCards() {
+  cardGrid.innerHTML = "";
+  shelfSummary.textContent = state.items.length
+    ? `${state.items.length} карточек · ${state.items.reduce((sum, item) => sum + Number(item.new_count || 0), 0)} новых`
+    : "Добавьте первый поиск или выберите карточку для открытия RuTracker.";
+
+  const add = document.createElement("button");
+  add.className = "add-card";
+  add.type = "button";
+  add.innerHTML = `
+    <span class="add-card-inner">
+      <span class="add-plus">${icon("plus")}</span>
+      <strong>Добавить фильм</strong>
+      <span>Новый поиск RuTracker</span>
+    </span>
+  `;
+  add.addEventListener("click", () => openMovieModal());
+  cardGrid.append(add);
+
+  for (const item of state.items) {
+    cardGrid.append(createMovieCard(item));
+  }
+}
+
+function createMovieCard(item) {
+  const card = document.createElement("article");
+  card.className = "movie-card";
+
+  const main = document.createElement("button");
+  main.type = "button";
+  main.className = "card-main";
+  main.title = "Открыть поиск RuTracker";
+  main.addEventListener("click", () => {
+    window.open(item.search_url, "_blank", "noreferrer");
+  });
+
+  const poster = document.createElement("div");
+  poster.className = "poster";
+  if (item.poster_url) {
+    const img = document.createElement("img");
+    img.src = item.poster_url;
+    img.alt = item.title || item.query;
+    img.loading = "lazy";
+    img.addEventListener("error", () => {
+      img.remove();
+      poster.append(posterFallback(item.title || item.query));
+    }, { once: true });
+    poster.append(img);
+  } else {
+    poster.append(posterFallback(item.title || item.query));
+  }
+
+  if (!item.enabled) {
+    const disabled = document.createElement("span");
+    disabled.className = "disabled-badge";
+    disabled.textContent = "пауза";
+    poster.append(disabled);
+  }
+
+  if (Number(item.new_count || 0) > 0) {
+    const badge = document.createElement("span");
+    badge.className = "new-badge";
+    badge.textContent = `${item.new_count} NEW`;
+    poster.append(badge);
+  }
+
+  const copy = document.createElement("div");
+  copy.className = "card-copy";
+  const title = document.createElement("h3");
+  title.textContent = item.title || item.query;
+  const meta = document.createElement("div");
+  meta.className = "card-meta";
+  for (const text of [
+    `${item.min_seeders}+ сидов`,
+    `${item.min_size_gb}+ GB`,
+    item.require_1080p ? "1080p+" : "любое",
+  ]) {
+    const chip = document.createElement("span");
+    chip.textContent = text;
+    meta.append(chip);
+  }
+  const lastCheck = lastChecks.get(item.id);
+  if (lastCheck) {
+    const chip = document.createElement("span");
+    chip.textContent = lastCheck.error ? "ошибка" : "проверено";
+    meta.append(chip);
+  }
+  copy.append(title, meta);
+  main.append(poster, copy);
+
+  const actions = document.createElement("div");
+  actions.className = "card-actions";
+  actions.append(
+    cardButton("edit", "Редактировать", () => openMovieModal(item)),
+    cardButton("refresh", "Проверить", () => checkItem(item)),
+    cardButton("reset", "Сбросить NEW", () => resetNew(item), Number(item.new_count || 0) <= 0),
+    cardButton("external", "IMDb", () => window.open(item.imdb_url, "_blank", "noreferrer"), !item.imdb_url),
+    cardButton("trash", "Удалить", () => deleteItem(item), false, "danger-button"),
+  );
+
+  card.append(main, actions);
+  return card;
+}
+
+function cardButton(iconName, title, onClick, disabled = false, extraClass = "") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `icon-button ${extraClass}`.trim();
+  button.title = title;
+  button.ariaLabel = title;
+  button.disabled = disabled;
+  button.innerHTML = icon(iconName);
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    onClick();
+  });
+  return button;
 }
 
 function render() {
   applySettingsToForms();
   renderRuntime();
-  renderList();
-  renderDetail();
+  renderCards();
 }
 
-function renderList() {
-  itemListEl.innerHTML = "";
-  queryCount.textContent = `${state.items.length}`;
+function openMovieModal(item = null) {
+  const config = state.config || {};
+  const fields = movieForm.elements;
+  movieForm.reset();
+  fields.id.value = item?.id || "";
+  fields.title.value = item?.title || "";
+  fields.query.value = item?.query || "";
+  fields.imdb_url.value = item?.imdb_url || "";
+  fields.min_seeders.value = item?.min_seeders ?? config.default_min_seeders ?? 5;
+  fields.min_size_gb.value = item?.min_size_gb ?? config.default_min_size_gb ?? 5;
+  fields.require_1080p.checked = item
+    ? Boolean(item.require_1080p)
+    : Boolean(config.default_require_1080p ?? true);
+  fields.enabled.checked = item ? Boolean(item.enabled) : true;
+  modalTitle.textContent = item ? "Редактировать фильм" : "Новый фильм";
+  metadataButton.hidden = !item;
+  movieModal.hidden = false;
+  setTimeout(() => fields.title.focus(), 0);
+}
 
-  if (!state.items.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty-list";
-    empty.textContent = "No queries yet.";
-    itemListEl.append(empty);
-    return;
-  }
+function closeMovieModal() {
+  movieModal.hidden = true;
+}
 
-  if (!selectedId || !state.items.some((item) => item.id === selectedId)) {
-    selectedId = state.items[0].id;
-  }
+async function saveMovie(event) {
+  event.preventDefault();
+  const submitButton = movieForm.querySelector("button[type='submit']");
+  setBusy(submitButton, true, "Сохраняем");
+  try {
+    const data = Object.fromEntries(new FormData(movieForm).entries());
+    const id = data.id;
+    delete data.id;
+    data.title = String(data.title || data.query || "").trim();
+    data.query = String(data.query || data.title || "").trim();
+    data.min_seeders = Number(data.min_seeders || 0);
+    data.min_size_gb = Number(data.min_size_gb || 0);
+    data.require_1080p = movieForm.elements.require_1080p.checked;
+    data.enabled = movieForm.elements.enabled.checked;
 
-  for (const item of state.items) {
-    const button = document.createElement("button");
-    button.className = "query-row";
-    button.classList.toggle("selected", item.id === selectedId);
-    button.innerHTML = `
-      <span class="query-enabled"></span>
-      <span class="query-name"></span>
-      <span class="query-badge"></span>
-    `;
-    button.querySelector(".query-enabled").textContent = item.enabled ? "✓" : "";
-    button.querySelector(".query-name").textContent = item.query;
-    const badge = button.querySelector(".query-badge");
-    badge.textContent = item.new_count > 0 ? item.new_count : "";
-    badge.classList.toggle("empty", item.new_count <= 0);
-    button.addEventListener("click", () => {
-      selectedId = item.id;
-      render();
-    });
-    itemListEl.append(button);
+    const item = id
+      ? await api(`/api/items/${id}`, { method: "PATCH", body: JSON.stringify(data) })
+      : await api("/api/items", { method: "POST", body: JSON.stringify(data) });
+    closeMovieModal();
+    await load();
+    refreshMetadata(item.id);
+  } catch (error) {
+    statusLine.textContent = `Не удалось сохранить: ${error.message}`;
+  } finally {
+    setBusy(submitButton, false);
   }
 }
 
-function renderDetail() {
-  const item = state.items.find((candidate) => candidate.id === selectedId);
-  if (!item) {
-    detailPanel.innerHTML = `<div class="empty-detail">Select a query.</div>`;
+async function refreshMetadata(itemId = movieForm.elements.id.value) {
+  if (!itemId) {
+    statusLine.textContent = "Сначала сохраните карточку, потом обновите постер.";
     return;
   }
-
-  const lastCheck = lastChecks.get(item.id);
-  const newResults = item.results.filter((result) => result.is_new);
-
-  detailPanel.innerHTML = `
-    <div class="detail-header">
-      <label class="toggle">
-        <input class="enabled" type="checkbox">
-        <span></span>
-      </label>
-      <div class="detail-title">
-        <a class="search-link" target="_blank" rel="noreferrer"></a>
-        <div class="detail-subtitle"></div>
-      </div>
-      <span class="badge"></span>
-    </div>
-    <div class="notice"></div>
-    <div class="detail-controls">
-      <label>
-        <span>Search query</span>
-        <input class="edit-query" type="text">
-      </label>
-      <label>
-        <span>Min seeders</span>
-        <input class="min-seeders" type="number" min="0">
-      </label>
-      <label>
-        <span>Min GB</span>
-        <input class="min-size-gb" type="number" min="0" step="0.1">
-      </label>
-      <label class="checkbox-field">
-        <input class="require-1080p" type="checkbox">
-        <span>Require 1080p+</span>
-      </label>
-      <button class="save">Save</button>
-      <button class="check">Check</button>
-      <button class="open-search">Open search</button>
-      <button class="reset">Reset new</button>
-      <button class="delete danger">Delete</button>
-    </div>
-    <div class="results"></div>
-  `;
-
-  const enabled = detailPanel.querySelector(".enabled");
-  const link = detailPanel.querySelector(".search-link");
-  const badge = detailPanel.querySelector(".badge");
-  const notice = detailPanel.querySelector(".notice");
-  const editQuery = detailPanel.querySelector(".edit-query");
-  const minSeeders = detailPanel.querySelector(".min-seeders");
-  const minSizeGb = detailPanel.querySelector(".min-size-gb");
-  const require1080p = detailPanel.querySelector(".require-1080p");
-  const results = detailPanel.querySelector(".results");
-  const save = detailPanel.querySelector(".save");
-  const check = detailPanel.querySelector(".check");
-  const openSearch = detailPanel.querySelector(".open-search");
-  const reset = detailPanel.querySelector(".reset");
-  const deleteButton = detailPanel.querySelector(".delete");
-
-  enabled.checked = Boolean(item.enabled);
-  link.href = item.search_url;
-  link.textContent = item.query;
-  detailPanel.querySelector(".detail-subtitle").textContent = `${newResults.length} pending · ${item.min_seeders}+ seeders · ${item.min_size_gb}+ GB`;
-  badge.textContent = item.new_count > 0 ? `${item.new_count} new` : "0 new";
-  badge.classList.toggle("empty", item.new_count <= 0);
-  notice.textContent = lastCheck ? lastCheck.message : "";
-  notice.classList.toggle("error", Boolean(lastCheck?.error));
-  editQuery.value = item.query;
-  minSeeders.value = item.min_seeders;
-  minSizeGb.value = item.min_size_gb;
-  require1080p.checked = Boolean(item.require_1080p);
-
-  enabled.addEventListener("change", async () => {
-    await api(`/api/items/${item.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ ...item, enabled: enabled.checked }),
-    });
+  statusLine.textContent = "Обновляем постер IMDb...";
+  try {
+    const payload = await api(`/api/items/${itemId}/refresh-metadata`, { method: "POST" });
     await load();
-  });
+    statusLine.textContent = payload.metadata_error
+      ? "Постер не найден, оставили fallback."
+      : "Постер обновлен.";
+  } catch (error) {
+    statusLine.textContent = `Постер не обновился: ${error.message}`;
+  }
+}
 
-  save.addEventListener("click", async () => {
-    setBusy(save, true, "Saving");
-    try {
-      await api(`/api/items/${item.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          ...item,
-          query: editQuery.value,
-          min_seeders: Number(minSeeders.value),
-          min_size_gb: Number(minSizeGb.value),
-          require_1080p: require1080p.checked,
-        }),
-      });
-      await load();
-    } finally {
-      setBusy(save, false, "Save");
-    }
-  });
-
-  check.addEventListener("click", async () => {
-    setBusy(check, true, "Checking");
-    try {
-      const result = await api(`/api/items/${item.id}/check`, { method: "POST" });
-      rememberCheck(result);
-      await load();
-    } catch (error) {
-      lastChecks.set(item.id, { error: true, message: `Check failed: ${error.message}` });
-      render();
-    } finally {
-      setBusy(check, false, "Check");
-    }
-  });
-
-  openSearch.addEventListener("click", () => {
-    window.open(item.search_url, "_blank", "noreferrer");
-  });
-
-  reset.addEventListener("click", async () => {
-    setBusy(reset, true, "Resetting");
-    try {
-      await api(`/api/items/${item.id}/reset-new`, { method: "POST" });
-      await load();
-    } finally {
-      setBusy(reset, false, "Reset new");
-    }
-  });
-
-  deleteButton.addEventListener("click", async () => {
-    if (!confirm(`Delete "${item.query}"?`)) return;
-    await api(`/api/items/${item.id}`, { method: "DELETE" });
-    selectedId = null;
+async function checkItem(item) {
+  statusLine.textContent = `Проверяем: ${item.title || item.query}`;
+  try {
+    const result = await api(`/api/items/${item.id}/check`, { method: "POST" });
+    rememberCheck(result);
     await load();
+    statusLine.textContent = `Проверка: ${result.matched || 0} совпадений, ${result.new || 0} новых.`;
+  } catch (error) {
+    lastChecks.set(item.id, { error: true, message: error.message });
+    statusLine.textContent = `Ошибка проверки: ${error.message}`;
+    renderCards();
+  }
+}
+
+async function resetNew(item) {
+  await api(`/api/items/${item.id}/reset-new`, { method: "POST" });
+  await load();
+}
+
+async function deleteItem(item) {
+  if (!confirm(`Удалить "${item.title || item.query}"?`)) return;
+  await api(`/api/items/${item.id}`, { method: "DELETE" });
+  await load();
+}
+
+function rememberCheck(result) {
+  if (!result || !result.item) return;
+  lastChecks.set(result.item.id, {
+    error: Boolean(result.error),
+    message: result.error
+      ? `Ошибка: ${result.error}`
+      : `${result.raw || 0} найдено, ${result.matched || 0} подходит, ${result.new || 0} новых.`,
   });
-
-  if (!newResults.length) {
-    results.innerHTML = `<div class="empty-results">No pending new results.</div>`;
-    return;
-  }
-
-  for (const result of newResults) {
-    const row = document.createElement("div");
-    row.className = "result";
-    row.innerHTML = `
-      <a href="${result.url}" target="_blank" rel="noreferrer"></a>
-      <span class="result-meta"></span>
-    `;
-    row.querySelector("a").textContent = result.title;
-    const size = result.size_label || `${((result.size_bytes || 0) / 1024 / 1024 / 1024).toFixed(1)} GB`;
-    const quality = result.resolution ? `${result.resolution} · ` : "";
-    row.querySelector(".result-meta").textContent = `${quality}${size} · ${result.seeders} seeders`;
-    results.append(row);
-  }
 }
 
 async function load() {
@@ -359,40 +449,37 @@ async function refreshRuntime() {
   } catch (error) {
     runtimePanel.classList.remove("running", "paused");
     runtimePanel.classList.add("stale");
-    runtimeTitle.textContent = "Status unavailable";
+    runtimeTitle.textContent = "Статус недоступен";
     runtimeSummary.textContent = error.message;
   }
 }
 
-addForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const data = Object.fromEntries(new FormData(addForm).entries());
-  data.min_seeders = Number(data.min_seeders || state.config.default_min_seeders || 5);
-  data.min_size_gb = Number(data.min_size_gb || state.config.default_min_size_gb || 5);
-  data.require_1080p = addForm.require_1080p.checked;
-  const item = await api("/api/items", { method: "POST", body: JSON.stringify(data) });
-  selectedId = item.id;
-  addForm.reset();
-  addForm.min_seeders.value = state.config.default_min_seeders || 5;
-  addForm.min_size_gb.value = state.config.default_min_size_gb || 5;
-  addForm.require_1080p.checked = Boolean(state.config.default_require_1080p);
-  await load();
+settingsToggle.addEventListener("click", () => {
+  settingsDrawer.hidden = !settingsDrawer.hidden;
 });
 
-function rememberCheck(result) {
-  if (!result || !result.item) return;
-  lastChecks.set(result.item.id, {
-    error: Boolean(result.error),
-    message: result.error
-      ? `Check failed: ${result.error}`
-      : `Last check: ${result.raw || 0} found, ${result.matched || 0} matched filter, ${result.new || 0} new this check, ${result.pruned_new || 0} filtered out, ${result.pending_new || 0} pending.`,
-  });
-}
+themeToggle.addEventListener("click", () => {
+  applyTheme(document.body.classList.contains("light") ? "dark" : "light");
+});
+
+manualAddButton.addEventListener("click", () => openMovieModal());
+modalCloseButton.addEventListener("click", closeMovieModal);
+metadataButton.addEventListener("click", () => refreshMetadata());
+
+movieModal.addEventListener("click", (event) => {
+  if (event.target === movieModal) closeMovieModal();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !movieModal.hidden) closeMovieModal();
+});
+
+movieForm.addEventListener("submit", saveMovie);
 
 settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const submitButton = settingsForm.querySelector("button[type='submit']");
-  setBusy(submitButton, true, "Saving");
+  setBusy(submitButton, true, "Сохраняем");
   try {
     const data = Object.fromEntries(new FormData(settingsForm).entries());
     data.default_min_seeders = Number(data.default_min_seeders || 0);
@@ -404,36 +491,41 @@ settingsForm.addEventListener("submit", async (event) => {
     data.max_search_pages = Number(data.max_search_pages || 3);
     await api("/api/settings", { method: "PATCH", body: JSON.stringify(data) });
     await load();
+  } catch (error) {
+    statusLine.textContent = `Настройки не сохранены: ${error.message}`;
   } finally {
-    setBusy(submitButton, false, "Save settings");
+    setBusy(submitButton, false);
   }
 });
 
 checkAllButton.addEventListener("click", async () => {
-  setBusy(checkAllButton, true, "Checking...");
+  setBusy(checkAllButton, true, "Проверяем");
   try {
     const summary = await api("/api/check-all", { method: "POST" });
     for (const result of summary.results || []) {
       rememberCheck(result);
       if (result.error && result.item) {
-        lastChecks.set(result.item.id, {
-          error: true,
-          message: `Check failed: ${result.error}`,
-        });
+        lastChecks.set(result.item.id, { error: true, message: result.error });
       }
     }
     await load();
     await refreshRuntime();
-    statusLine.textContent = `Check complete: ${summary.items_checked} checked, ${summary.total_new} new this check, ${summary.total_pending_new || 0} pending.`;
+    statusLine.textContent = `Готово: ${summary.items_checked} проверено, ${summary.total_new} новых, ${summary.total_pending_new || 0} ждут.`;
   } catch (error) {
-    statusLine.textContent = `Check failed: ${error.message}`;
+    statusLine.textContent = `Проверка не удалась: ${error.message}`;
   } finally {
-    setBusy(checkAllButton, false, "Check all");
+    setBusy(checkAllButton, false);
   }
 });
 
-load().catch((error) => {
-  statusLine.textContent = error.message;
+stopServerButton.addEventListener("click", async () => {
+  setBusy(stopServerButton, true, "...");
+  try {
+    await api("/api/shutdown", { method: "POST" });
+    statusLine.textContent = "Сервер остановлен. Вкладку можно закрыть.";
+  } catch (error) {
+    statusLine.textContent = "Сервер остановлен. Вкладку можно закрыть.";
+  }
 });
 
 async function heartbeat() {
@@ -443,10 +535,16 @@ async function heartbeat() {
       body: JSON.stringify({ session_id: sessionId }),
     });
   } catch (error) {
-    // If the server is shutting down, the next manual launch will start it again.
+    // Если сервер уже закрывается, следующий запуск приложения поднимет его снова.
   }
 }
 
+applyTheme(localStorage.getItem("theme") || "dark");
+hydrateIcons();
 heartbeat();
 setInterval(heartbeat, 10000);
 setInterval(refreshRuntime, 15000);
+
+load().catch((error) => {
+  statusLine.textContent = error.message;
+});

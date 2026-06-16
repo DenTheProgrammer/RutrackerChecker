@@ -27,9 +27,11 @@ DB_PATH = DATA_DIR / "app.db"
 STATIC_DIR = BASE_DIR / "static"
 TRAY_SCRIPT_PATH = BASE_DIR / "scripts" / "start-tray.ps1"
 RUTRACKER_BASE_URL = "https://rutracker.org/forum"
+IMDB_BASE_URL = "https://www.imdb.com"
 APP_VERSION = "1.5.1"
 RUNTIME_STATUS_PATH = DATA_DIR / "runtime_status.json"
 BACKGROUND_STALE_SECONDS = 180
+METADATA_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) RutrackerChecker/1.0"
 
 
 def load_env(path: Path = BASE_DIR / ".env") -> dict[str, str]:
@@ -276,6 +278,107 @@ def filter_results(
     ]
 
 
+def clean_external_url(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    parsed = urllib.parse.urlparse(text)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return text
+
+
+def normalize_imdb_url(value: Any) -> str:
+    url = clean_external_url(value)
+    if not url:
+        return ""
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.netloc.lower().endswith("imdb.com"):
+        return ""
+    match = re.search(r"/title/(tt\d+)", parsed.path)
+    if match:
+        return f"{IMDB_BASE_URL}/title/{match.group(1)}/"
+    return url
+
+
+def fetch_html(url: str) -> str:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": METADATA_USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+            "Cache-Control": "no-cache",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        raw = response.read()
+        charset = response.headers.get_content_charset() or "utf-8"
+        return raw.decode(charset, errors="replace")
+
+
+def extract_meta_content(html: str, names: tuple[str, ...]) -> str:
+    for attr in ("property", "name"):
+        for name in names:
+            pattern = (
+                rf'<meta\b(?=[^>]*\b{attr}=["\']{re.escape(name)}["\'])'
+                r'(?=[^>]*\bcontent=["\']([^"\']+)["\'])[^>]*>'
+            )
+            match = re.search(pattern, html, flags=re.I | re.S)
+            if match:
+                return unescape(match.group(1)).strip()
+    return ""
+
+
+def discover_imdb_url(title: str) -> str:
+    query = urllib.parse.quote(str(title or "").strip())
+    if not query:
+        return ""
+    html = fetch_html(f"{IMDB_BASE_URL}/find/?q={query}&s=tt&ttype=ft")
+    match = re.search(r'href=["\'](/title/(tt\d+)/[^"\']*)["\']', html, flags=re.I)
+    if not match:
+        return ""
+    return f"{IMDB_BASE_URL}/title/{match.group(2)}/"
+
+
+def fetch_movie_metadata(title: str, imdb_url: str = "") -> dict[str, str]:
+    normalized_imdb_url = normalize_imdb_url(imdb_url)
+    if not normalized_imdb_url:
+        normalized_imdb_url = discover_imdb_url(title)
+    if not normalized_imdb_url:
+        return {"imdb_url": "", "poster_url": ""}
+
+    html = fetch_html(normalized_imdb_url)
+    poster_url = clean_external_url(
+        extract_meta_content(html, ("og:image", "twitter:image"))
+    )
+    return {"imdb_url": normalized_imdb_url, "poster_url": poster_url}
+
+
+def refresh_item_metadata(db: "Database", item_id: int) -> dict[str, Any]:
+    item = db.get_item(item_id)
+    if item is None:
+        raise KeyError("item not found")
+
+    metadata_error = ""
+    try:
+        metadata = fetch_movie_metadata(
+            str(item.get("title") or item.get("query") or ""),
+            str(item.get("imdb_url") or ""),
+        )
+        item = db.update_item_metadata(
+            item_id,
+            metadata.get("imdb_url", ""),
+            metadata.get("poster_url", ""),
+        )
+    except Exception as exc:
+        metadata_error = str(exc)
+        item = db.get_item(item_id)
+        assert item is not None
+
+    return {"item": item, "metadata_error": metadata_error}
+
+
 class Database:
     def __init__(self, path: Path = DB_PATH) -> None:
         self.path = path
@@ -307,6 +410,9 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL,
                 query TEXT NOT NULL,
+                imdb_url TEXT NOT NULL DEFAULT '',
+                poster_url TEXT NOT NULL DEFAULT '',
+                poster_updated_at TEXT NOT NULL DEFAULT '',
                 min_seeders INTEGER NOT NULL DEFAULT 5,
                 min_size_gb REAL NOT NULL DEFAULT 5,
                 require_1080p INTEGER NOT NULL DEFAULT 1,
@@ -341,6 +447,9 @@ class Database:
             );
             """
         )
+        self.ensure_column(connection, "items", "imdb_url", "TEXT NOT NULL DEFAULT ''")
+        self.ensure_column(connection, "items", "poster_url", "TEXT NOT NULL DEFAULT ''")
+        self.ensure_column(connection, "items", "poster_updated_at", "TEXT NOT NULL DEFAULT ''")
         self.ensure_column(connection, "items", "min_size_gb", "REAL NOT NULL DEFAULT 5")
         self.ensure_column(connection, "items", "require_1080p", "INTEGER NOT NULL DEFAULT 1")
         self.ensure_column(connection, "results", "size_bytes", "INTEGER NOT NULL DEFAULT 0")
@@ -463,9 +572,13 @@ class Database:
 
     def create_item(self, payload: dict[str, Any]) -> dict[str, Any]:
         query = str(payload.get("query") or payload.get("title") or "").strip()
-        title = query
+        title = str(payload.get("title") or query).strip()
         if not query:
             raise ValueError("query is required")
+        if not title:
+            title = query
+        imdb_url = normalize_imdb_url(payload.get("imdb_url"))
+        poster_url = clean_external_url(payload.get("poster_url"))
         min_seeders = int(
             payload.get("min_seeders") or self.get_setting_int("default_min_seeders", DEFAULT_MIN_SEEDERS)
         )
@@ -480,10 +593,22 @@ class Database:
         enabled = 1 if payload.get("enabled", True) else 0
         cursor = self.conn().execute(
             """
-            INSERT INTO items (title, query, min_seeders, min_size_gb, require_1080p, enabled)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO items
+                (title, query, imdb_url, poster_url, poster_updated_at,
+                 min_seeders, min_size_gb, require_1080p, enabled)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (title, query, min_seeders, min_size_gb, require_1080p, enabled),
+            (
+                title,
+                query,
+                imdb_url,
+                poster_url,
+                dt.datetime.now(dt.timezone.utc).isoformat() if poster_url else "",
+                min_seeders,
+                min_size_gb,
+                require_1080p,
+                enabled,
+            ),
         )
         self.conn().commit()
         item = self.get_item(int(cursor.lastrowid))
@@ -497,6 +622,8 @@ class Database:
 
         query = str(payload.get("query", item["query"])).strip()
         title = str(payload.get("title", query)).strip() or query
+        imdb_url = normalize_imdb_url(payload.get("imdb_url", item.get("imdb_url", "")))
+        poster_url = clean_external_url(payload.get("poster_url", item.get("poster_url", "")))
         min_seeders = int(payload.get("min_seeders", item["min_seeders"]))
         min_size_gb = float(payload.get("min_size_gb", item["min_size_gb"]))
         require_1080p = 1 if payload.get("require_1080p", bool(item["require_1080p"])) else 0
@@ -507,11 +634,59 @@ class Database:
         self.conn().execute(
             """
             UPDATE items
-            SET title = ?, query = ?, min_seeders = ?, min_size_gb = ?, require_1080p = ?, enabled = ?,
+            SET title = ?, query = ?, imdb_url = ?, poster_url = ?,
+                poster_updated_at = CASE
+                    WHEN poster_url <> ? THEN ?
+                    ELSE poster_updated_at
+                END,
+                min_seeders = ?, min_size_gb = ?, require_1080p = ?, enabled = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
             """,
-            (title, query, min_seeders, min_size_gb, require_1080p, enabled, item_id),
+            (
+                title,
+                query,
+                imdb_url,
+                poster_url,
+                poster_url,
+                dt.datetime.now(dt.timezone.utc).isoformat() if poster_url else "",
+                min_seeders,
+                min_size_gb,
+                require_1080p,
+                enabled,
+                item_id,
+            ),
+        )
+        self.conn().commit()
+        updated = self.get_item(item_id)
+        assert updated is not None
+        return updated
+
+    def update_item_metadata(
+        self,
+        item_id: int,
+        imdb_url: str,
+        poster_url: str,
+    ) -> dict[str, Any]:
+        if self.get_item(item_id) is None:
+            raise KeyError("item not found")
+        imdb_url = normalize_imdb_url(imdb_url)
+        poster_url = clean_external_url(poster_url)
+        self.conn().execute(
+            """
+            UPDATE items
+            SET imdb_url = COALESCE(NULLIF(?, ''), imdb_url),
+                poster_url = COALESCE(NULLIF(?, ''), poster_url),
+                poster_updated_at = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                imdb_url,
+                poster_url,
+                dt.datetime.now(dt.timezone.utc).isoformat(),
+                item_id,
+            ),
         )
         self.conn().commit()
         updated = self.get_item(item_id)
@@ -1078,6 +1253,11 @@ class RequestHandler(BaseHTTPRequestHandler):
             check_match = re.match(r"^/api/items/(\d+)/check$", self.path)
             if check_match:
                 self.send_json(CHECKER.check_item(int(check_match.group(1)), notify=True))
+                return
+
+            metadata_match = re.match(r"^/api/items/(\d+)/refresh-metadata$", self.path)
+            if metadata_match:
+                self.send_json(refresh_item_metadata(DB, int(metadata_match.group(1))))
                 return
 
             reset_match = re.match(r"^/api/items/(\d+)/reset-new$", self.path)
