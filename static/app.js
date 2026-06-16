@@ -29,6 +29,13 @@ let state = { items: [], config: {}, runtime: {} };
 let lastChecks = new Map();
 let settingsSaveTimer = null;
 let isHydratingSettings = false;
+let posterPollTimer = null;
+let posterPollDeadline = 0;
+let posterPollInFlight = false;
+
+const POSTER_POLL_INTERVAL_MS = 3000;
+const POSTER_POLL_DURATION_MS = 60000;
+const RECENT_METADATA_ATTEMPT_MS = 24 * 60 * 60 * 1000;
 
 const sessionId = crypto.randomUUID
   ? crypto.randomUUID()
@@ -91,6 +98,15 @@ function parseDate(value) {
   if (!value) return null;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function hasRecentMetadataAttempt(item) {
+  const date = parseDate(item?.poster_updated_at);
+  return Boolean(date && Date.now() - date.getTime() < RECENT_METADATA_ATTEMPT_MS);
+}
+
+function needsPosterPolling() {
+  return (state.items || []).some((item) => !item.poster_url && !hasRecentMetadataAttempt(item));
 }
 
 function formatClock(value) {
@@ -345,6 +361,7 @@ function createMovieCard(item) {
     cardButton("edit", "Редактировать", () => openMovieModal(item)),
     cardButton("refresh", "Проверить", () => checkItem(item)),
     cardButton("reset", "Сбросить NEW", () => resetNew(item), Number(item.new_count || 0) <= 0),
+    cardButton("image", "Найти постер", () => refreshMetadata(item.id), Boolean(item.poster_url)),
     cardButton("external", "IMDb", () => window.open(item.imdb_url, "_blank", "noreferrer"), !item.imdb_url),
     cardButton("trash", "Удалить", () => deleteItem(item), false, "danger-button"),
   );
@@ -499,6 +516,49 @@ async function load() {
   ]);
   state = { ...itemsPayload, runtime: runtimePayload };
   render();
+  startPosterPolling();
+}
+
+function stopPosterPolling() {
+  if (posterPollTimer) {
+    clearInterval(posterPollTimer);
+    posterPollTimer = null;
+  }
+  posterPollDeadline = 0;
+  posterPollInFlight = false;
+}
+
+async function refreshItemsForPosters() {
+  if (posterPollInFlight) return;
+  if (Date.now() >= posterPollDeadline || !needsPosterPolling()) {
+    stopPosterPolling();
+    return;
+  }
+
+  posterPollInFlight = true;
+  try {
+    const itemsPayload = await api("/api/items");
+    state = {
+      ...state,
+      items: itemsPayload.items || [],
+      config: itemsPayload.config || state.config,
+    };
+    renderCards();
+    if (!needsPosterPolling()) {
+      stopPosterPolling();
+    }
+  } catch (error) {
+    stopPosterPolling();
+  } finally {
+    posterPollInFlight = false;
+  }
+}
+
+function startPosterPolling() {
+  if (posterPollTimer || !needsPosterPolling()) return;
+  posterPollDeadline = Date.now() + POSTER_POLL_DURATION_MS;
+  posterPollTimer = setInterval(refreshItemsForPosters, POSTER_POLL_INTERVAL_MS);
+  refreshItemsForPosters();
 }
 
 async function refreshRuntime() {

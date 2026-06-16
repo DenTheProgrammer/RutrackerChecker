@@ -458,6 +458,41 @@ class DatabaseTests(unittest.TestCase):
                     server.server_close()
                     db.close()
 
+    def test_opening_ui_starts_metadata_backfill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            with patch.object(app, "DB", db), patch("app.start_metadata_backfill") as backfill:
+                server = ThreadingHTTPServer(("127.0.0.1", 0), RequestHandler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/", timeout=5).read()
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    db.close()
+
+            backfill.assert_called_once()
+
+    def test_items_api_does_not_start_metadata_backfill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            with patch.object(app, "DB", db), patch("app.start_metadata_backfill") as backfill:
+                server = ThreadingHTTPServer(("127.0.0.1", 0), RequestHandler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    urllib.request.urlopen(
+                        f"http://127.0.0.1:{server.server_port}/api/items",
+                        timeout=5,
+                    ).read()
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    db.close()
+
+            backfill.assert_not_called()
+
     def test_result_insert_is_idempotent_and_reset_keeps_history(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / "app.db")
