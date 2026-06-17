@@ -124,6 +124,46 @@ function Invoke-CheckNow {
         -WindowStyle Hidden
 }
 
+function Stop-AppProcesses {
+    $Patterns = @("*background_loop.py*", "*check_once.py*", "*app.py*", "*RutrackerChecker.exe*")
+    $Processes = @(Get-CimInstance Win32_Process |
+        Where-Object {
+            if (-not $_.CommandLine -or $_.ProcessId -eq $PID) {
+                return $false
+            }
+            if ($_.CommandLine -notlike "*$Root*") {
+                return $false
+            }
+            foreach ($Pattern in $Patterns) {
+                if ($_.CommandLine -like $Pattern) {
+                    return $true
+                }
+            }
+            return $false
+        })
+
+    foreach ($Process in $Processes) {
+        try {
+            Stop-Process -Id $Process.ProcessId -Force
+        } catch {
+        }
+    }
+}
+
+function Exit-App {
+    try {
+        Invoke-RestMethod -Method Post -Uri "$($AppUrl)api/shutdown" -TimeoutSec 2 | Out-Null
+        Start-Sleep -Milliseconds 500
+    } catch {
+    }
+
+    Stop-AppProcesses
+    if ($NotifyIcon) {
+        $NotifyIcon.Visible = $false
+    }
+    [System.Windows.Forms.Application]::Exit()
+}
+
 function Get-RuntimeStatus {
     if (-not (Test-Path $RuntimeStatusPath)) {
         return $null
@@ -306,7 +346,7 @@ try {
     $ResumeItem = $Menu.Items.Add("Resume background checks")
     $RefreshItem = $Menu.Items.Add("Refresh status")
     $Menu.Items.Add("-") | Out-Null
-    $ExitItem = $Menu.Items.Add("Exit tray icon")
+    $ExitItem = $Menu.Items.Add("Exit")
     $NotifyIcon.ContextMenuStrip = $Menu
 
     $OpenItem.Add_Click({ Open-Ui })
@@ -315,10 +355,7 @@ try {
     $PauseItem.Add_Click({ Set-BackgroundEnabled $false; [System.Windows.Forms.Application]::Exit() })
     $ResumeItem.Add_Click({ Set-BackgroundEnabled $true; Start-BackgroundLoop })
     $RefreshItem.Add_Click({ Update-Tray })
-    $ExitItem.Add_Click({
-        $NotifyIcon.Visible = $false
-        [System.Windows.Forms.Application]::Exit()
-    })
+    $ExitItem.Add_Click({ Exit-App })
 
     $Timer = New-Object System.Windows.Forms.Timer
     $Timer.Interval = 15000
