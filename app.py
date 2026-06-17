@@ -805,6 +805,46 @@ def refresh_item_metadata(db: "Database", item_id: int) -> dict[str, Any]:
     return {"item": item, "metadata_error": metadata_error}
 
 
+def duplicate_compare_text(value: str) -> str:
+    value = clean_metadata_piece(value).lower()
+    value = re.sub(r"[^a-z0-9а-яё]+", " ", value, flags=re.IGNORECASE)
+    return " ".join(value.split())
+
+
+def duplicate_tokens(value: str) -> list[str]:
+    tokens = duplicate_compare_text(value).split()
+    return [
+        token
+        for token in tokens
+        if token not in {"a", "an", "the"} and not re.fullmatch(r"(19|20)\d{2}", token)
+    ]
+
+
+def duplicate_similarity(left: str, right: str) -> float:
+    left_text = duplicate_compare_text(left)
+    right_text = duplicate_compare_text(right)
+    if not left_text or not right_text:
+        return 0.0
+    if left_text == right_text:
+        return 1.0
+
+    left_tokens = duplicate_tokens(left_text)
+    right_tokens = duplicate_tokens(right_text)
+    if len(left_tokens) >= 2 and len(right_tokens) >= 2:
+        shorter = " ".join(left_tokens if len(left_tokens) <= len(right_tokens) else right_tokens)
+        longer = " ".join(right_tokens if len(left_tokens) <= len(right_tokens) else left_tokens)
+        if re.search(rf"(^| ){re.escape(shorter)}($| )", longer):
+            return 0.92
+
+        left_set = set(left_tokens)
+        right_set = set(right_tokens)
+        overlap = len(left_set & right_set)
+        if overlap >= 2:
+            return overlap / max(len(left_set), len(right_set))
+
+    return 0.0
+
+
 def metadata_attempt_is_recent(value: str, now: dt.datetime, max_age_hours: int = 24) -> bool:
     parsed = parse_iso_datetime(value)
     return parsed is not None and now - parsed < dt.timedelta(hours=max_age_hours)
@@ -1045,6 +1085,33 @@ class Database:
     def get_item(self, item_id: int) -> dict[str, Any] | None:
         row = self.conn().execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
         return dict(row) if row else None
+
+    def find_duplicate_candidates(self, item_id: int) -> list[dict[str, Any]]:
+        item = self.get_item(item_id)
+        if item is None:
+            raise KeyError("item not found")
+
+        item_values = [str(item.get("title") or ""), str(item.get("query") or "")]
+        candidates: list[dict[str, Any]] = []
+        for other in self.list_items():
+            if int(other["id"]) == item_id:
+                continue
+
+            item_imdb_url = normalize_imdb_url(item.get("imdb_url"))
+            other_imdb_url = normalize_imdb_url(other.get("imdb_url"))
+            if item_imdb_url and item_imdb_url == other_imdb_url:
+                best_score = 1.0
+            else:
+                best_score = 0.0
+                for left in item_values:
+                    for right in [str(other.get("title") or ""), str(other.get("query") or "")]:
+                        best_score = max(best_score, duplicate_similarity(left, right))
+
+            if best_score >= 0.75:
+                candidates.append({"item": other, "score": round(best_score, 3)})
+
+        candidates.sort(key=lambda candidate: (-float(candidate["score"]), int(candidate["item"]["id"])))
+        return candidates
 
     def create_item(self, payload: dict[str, Any]) -> dict[str, Any]:
         query = str(payload.get("query") or payload.get("title") or "").strip()
@@ -2454,6 +2521,20 @@ class RequestHandler(BaseHTTPRequestHandler):
                             **public_settings,
                             "telegram_enabled": NOTIFIER.enabled,
                         },
+                    }
+                )
+                return
+
+            duplicate_match = re.match(r"^/api/items/(\d+)/duplicates$", request_path)
+            if duplicate_match:
+                item_id = int(duplicate_match.group(1))
+                item = DB.get_item(item_id)
+                if item is None:
+                    raise KeyError("item not found")
+                self.send_json(
+                    {
+                        "item": item,
+                        "candidates": DB.find_duplicate_candidates(item_id),
                     }
                 )
                 return

@@ -22,6 +22,7 @@ from app import (
     RuTrackerClient,
     SearchResult,
     TransientRuTrackerError,
+    duplicate_similarity,
     fetch_movie_metadata,
     filter_results,
     parse_rutracker_results,
@@ -1426,6 +1427,51 @@ class DatabaseTests(unittest.TestCase):
             db.delete_item(item["id"])
             self.assertEqual(db.list_items(), [])
             self.assertEqual(db.list_results(item["id"]), [])
+            db.close()
+
+    def test_duplicate_candidates_include_same_imdb_url(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            first = db.create_item(
+                {
+                    "query": "dark knight",
+                    "imdb_url": "https://www.imdb.com/title/tt0468569/",
+                }
+            )
+            second = db.create_item(
+                {
+                    "query": "The Dark Knight 2008 Christopher Nolan",
+                    "imdb_url": "https://www.imdb.com/title/tt0468569/?ref_=fn_al_tt_1",
+                }
+            )
+
+            candidates = db.find_duplicate_candidates(second["id"])
+
+            self.assertEqual([candidate["item"]["id"] for candidate in candidates], [first["id"]])
+            self.assertEqual(candidates[0]["score"], 1.0)
+            db.close()
+
+    def test_duplicate_candidates_ignore_empty_imdb_url(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            first = db.create_item({"query": "Drama 2025"})
+            second = db.create_item({"query": "Comedy 2026"})
+
+            self.assertEqual(db.find_duplicate_candidates(second["id"]), [])
+            self.assertEqual(db.find_duplicate_candidates(first["id"]), [])
+            db.close()
+
+    def test_duplicate_candidates_include_similar_title_or_query(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            first = db.create_item({"query": "dark knight"})
+            second = db.create_item({"query": "The Dark Knight 2008 Christopher Nolan"})
+
+            candidates = db.find_duplicate_candidates(second["id"])
+
+            self.assertEqual([candidate["item"]["id"] for candidate in candidates], [first["id"]])
+            self.assertGreaterEqual(candidates[0]["score"], 0.75)
+            self.assertEqual(duplicate_similarity("", ""), 0.0)
             db.close()
 
     def test_settings_keep_saved_secret_when_blank(self):

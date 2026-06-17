@@ -1006,6 +1006,59 @@ button:disabled {
   color: #fff;
 }
 
+.duplicate-modal {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 18px;
+  width: min(560px, 100%);
+  padding: 24px;
+  overflow: visible;
+}
+
+.duplicate-mark {
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-color: color-mix(in srgb, var(--primary) 42%, transparent);
+}
+
+.duplicate-pair {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.duplicate-pair div {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-soft);
+}
+
+.duplicate-pair span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.duplicate-pair strong {
+  display: block;
+  overflow-wrap: anywhere;
+  line-height: 1.28;
+}
+
+.duplicate-actions {
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.danger-ghost-button {
+  color: var(--danger);
+}
+
 .danger-action:hover {
   background: color-mix(in srgb, var(--danger) 84%, #000);
 }

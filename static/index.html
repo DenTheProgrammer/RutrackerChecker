@@ -228,6 +228,33 @@
     </section>
   </div>
 
+  <div id="duplicateModal" class="modal-backdrop" hidden>
+    <section class="modal duplicate-modal" role="alertdialog" aria-modal="true" aria-labelledby="duplicateTitle" aria-describedby="duplicateMessage">
+      <div class="confirm-mark duplicate-mark">
+        <span data-icon="search"></span>
+      </div>
+      <div class="modal-heading confirm-heading">
+        <h2 id="duplicateTitle">Похоже на дубликаты?</h2>
+        <p id="duplicateMessage"></p>
+      </div>
+      <div class="duplicate-pair">
+        <div>
+          <span>Новая</span>
+          <strong id="duplicateNewTitle"></strong>
+        </div>
+        <div>
+          <span>Старая</span>
+          <strong id="duplicateOldTitle"></strong>
+        </div>
+      </div>
+      <div class="modal-actions duplicate-actions">
+        <button id="duplicateKeepBothButton" class="ghost-button" type="button">Оставить обе</button>
+        <button id="duplicateDeleteOldButton" class="ghost-button danger-ghost-button" type="button">Удалить старую</button>
+        <button id="duplicateDeleteNewButton" class="primary-button danger-action" type="button">Удалить новую</button>
+      </div>
+    </section>
+  </div>
+
   <script src="/static/app.js"></script>
 </body>
 </html>

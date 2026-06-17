@@ -16,6 +16,13 @@ const confirmTitle = document.querySelector("#confirmTitle");
 const confirmMessage = document.querySelector("#confirmMessage");
 const confirmOkButton = document.querySelector("#confirmOkButton");
 const confirmCancelButton = document.querySelector("#confirmCancelButton");
+const duplicateModal = document.querySelector("#duplicateModal");
+const duplicateMessage = document.querySelector("#duplicateMessage");
+const duplicateNewTitle = document.querySelector("#duplicateNewTitle");
+const duplicateOldTitle = document.querySelector("#duplicateOldTitle");
+const duplicateKeepBothButton = document.querySelector("#duplicateKeepBothButton");
+const duplicateDeleteOldButton = document.querySelector("#duplicateDeleteOldButton");
+const duplicateDeleteNewButton = document.querySelector("#duplicateDeleteNewButton");
 const movieAdvanced = document.querySelector("#movieAdvanced");
 const movieSubmitLabel = document.querySelector("#movieSubmitLabel");
 const metadataButton = document.querySelector("#metadataButton");
@@ -51,6 +58,11 @@ let posterPollTimer = null;
 let posterPollDeadline = 0;
 let posterPollInFlight = false;
 let pendingConfirm = null;
+let duplicateCheckQueue = [];
+let duplicatePrompting = false;
+let duplicateCheckInFlight = false;
+let pendingDuplicateResolve = null;
+let duplicateInitialSweepDone = false;
 
 const POSTER_POLL_INTERVAL_MS = 3000;
 const POSTER_POLL_DURATION_MS = 60000;
@@ -59,6 +71,7 @@ const CHECK_POLL_DURATION_MS = 120000;
 const UPDATE_POLL_INTERVAL_MS = 30 * 60 * 1000;
 const RECENT_METADATA_ATTEMPT_MS = 24 * 60 * 60 * 1000;
 const SECRET_PLACEHOLDER = "••••••••••••";
+const DUPLICATE_DECISION_PREFIX = "rutrackerDuplicateDecision:v1:";
 
 const sessionId = crypto.randomUUID
   ? crypto.randomUUID()
@@ -546,6 +559,109 @@ function showConfirmDialog({ title, message, confirmLabel = "Удалить" }) 
   });
 }
 
+function duplicateDecisionKey(leftId, rightId) {
+  const ids = [Number(leftId), Number(rightId)].sort((a, b) => a - b);
+  return `${DUPLICATE_DECISION_PREFIX}${ids[0]}:${ids[1]}`;
+}
+
+function hasDuplicateDecision(leftId, rightId) {
+  return Boolean(localStorage.getItem(duplicateDecisionKey(leftId, rightId)));
+}
+
+function rememberDuplicateDecision(leftId, rightId) {
+  localStorage.setItem(duplicateDecisionKey(leftId, rightId), String(Date.now()));
+}
+
+function itemDisplayName(item) {
+  return item?.title || item?.query || `Карточка #${item?.id || ""}`;
+}
+
+function closeDuplicateModal(action = "keep") {
+  if (duplicateModal.hidden) return;
+  duplicateModal.hidden = true;
+  const resolver = pendingDuplicateResolve;
+  pendingDuplicateResolve = null;
+  if (resolver) {
+    resolver(action);
+  }
+}
+
+function showDuplicateDialog(newItem, oldItem) {
+  duplicateMessage.textContent = "Карточки похожи по IMDb или строке поиска. Проверьте, это не один и тот же фильм?";
+  duplicateNewTitle.textContent = itemDisplayName(newItem);
+  duplicateOldTitle.textContent = itemDisplayName(oldItem);
+  duplicateModal.hidden = false;
+  setTimeout(() => duplicateKeepBothButton.focus(), 0);
+  return new Promise((resolve) => {
+    pendingDuplicateResolve = resolve;
+  });
+}
+
+async function handleDuplicateCandidate(item, candidate) {
+  const other = candidate.item;
+  if (!item?.id || !other?.id || hasDuplicateDecision(item.id, other.id)) return;
+  const newItem = Number(item.id) >= Number(other.id) ? item : other;
+  const oldItem = Number(item.id) >= Number(other.id) ? other : item;
+
+  duplicatePrompting = true;
+  try {
+    const action = await showDuplicateDialog(newItem, oldItem);
+    rememberDuplicateDecision(item.id, other.id);
+    if (action === "delete-new") {
+      await api(`/api/items/${newItem.id}`, { method: "DELETE" });
+      await load();
+    } else if (action === "delete-old") {
+      await api(`/api/items/${oldItem.id}`, { method: "DELETE" });
+      await load();
+    }
+  } finally {
+    duplicatePrompting = false;
+    runDuplicateCheckQueue();
+  }
+}
+
+async function checkItemDuplicates(itemId) {
+  if (!itemId) return;
+  try {
+    const payload = await api(`/api/items/${itemId}/duplicates`);
+    const item = payload.item;
+    const candidate = (payload.candidates || [])
+      .find((entry) => entry?.item?.id && !hasDuplicateDecision(item.id, entry.item.id));
+    if (candidate) {
+      await handleDuplicateCandidate(item, candidate);
+    }
+  } catch (error) {
+    // Duplicate prompts are advisory; failed checks should not block the main flow.
+  }
+}
+
+function queueDuplicateCheck(itemId) {
+  const id = Number(itemId);
+  if (!id || duplicateCheckQueue.includes(id)) return;
+  duplicateCheckQueue.push(id);
+  runDuplicateCheckQueue();
+}
+
+function queueDuplicateChecksForItems(items = []) {
+  for (const item of items) {
+    queueDuplicateCheck(item.id);
+  }
+}
+
+async function runDuplicateCheckQueue() {
+  if (duplicatePrompting || duplicateCheckInFlight || duplicateCheckQueue.length === 0) return;
+  const itemId = duplicateCheckQueue.shift();
+  duplicateCheckInFlight = true;
+  try {
+    await checkItemDuplicates(itemId);
+  } finally {
+    duplicateCheckInFlight = false;
+  }
+  if (!duplicatePrompting && !duplicateCheckInFlight && duplicateCheckQueue.length > 0) {
+    runDuplicateCheckQueue();
+  }
+}
+
 async function saveMovie(event) {
   event.preventDefault();
   if (!movieForm.elements.id.value && !hasCredentials()) {
@@ -577,6 +693,7 @@ async function saveMovie(event) {
     }
     closeMovieModal();
     await load();
+    queueDuplicateCheck(item.id);
     if (!id && item.initial_check_started) {
       startCheckPolling();
     }
@@ -599,6 +716,7 @@ async function refreshMetadata(itemId = movieForm.elements.id.value) {
   try {
     const payload = await api(`/api/items/${itemId}/refresh-metadata`, { method: "POST" });
     await load();
+    queueDuplicateCheck(payload.item?.id || itemId);
     statusLine.textContent = payload.metadata_error
       ? "Данные IMDb не найдены, оставили текущие значения."
       : "Данные IMDb обновлены.";
@@ -688,6 +806,10 @@ async function load() {
   syncCheckPayload(itemsPayload);
   state = { ...itemsPayload, runtime: runtimePayload, update: updatePayload };
   render();
+  if (!duplicateInitialSweepDone) {
+    duplicateInitialSweepDone = true;
+    queueDuplicateChecksForItems(state.items || []);
+  }
   startPosterPolling();
   startCheckPolling();
 }
@@ -759,14 +881,24 @@ async function refreshItemsForPosters() {
 
   posterPollInFlight = true;
   try {
+    const previousItems = new Map((state.items || []).map((item) => [Number(item.id), item]));
     const itemsPayload = await api("/api/items");
     syncCheckPayload(itemsPayload);
+    const changedItems = (itemsPayload.items || []).filter((item) => {
+      const previous = previousItems.get(Number(item.id));
+      return previous && (
+        previous.title !== item.title ||
+        previous.query !== item.query ||
+        previous.imdb_url !== item.imdb_url
+      );
+    });
     state = {
       ...state,
       items: itemsPayload.items || [],
       config: itemsPayload.config || state.config,
     };
     renderCards();
+    queueDuplicateChecksForItems(changedItems);
     if (!needsPosterPolling()) {
       stopPosterPolling();
     }
@@ -933,10 +1065,21 @@ confirmModal.addEventListener("click", (event) => {
   if (event.target === confirmModal) closeConfirmModal(false);
 });
 
+duplicateModal.addEventListener("click", (event) => {
+  if (event.target === duplicateModal) closeDuplicateModal("keep");
+});
+
 confirmCancelButton.addEventListener("click", () => closeConfirmModal(false));
 confirmOkButton.addEventListener("click", () => closeConfirmModal(true));
+duplicateKeepBothButton.addEventListener("click", () => closeDuplicateModal("keep"));
+duplicateDeleteOldButton.addEventListener("click", () => closeDuplicateModal("delete-old"));
+duplicateDeleteNewButton.addEventListener("click", () => closeDuplicateModal("delete-new"));
 
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !duplicateModal.hidden) {
+    closeDuplicateModal("keep");
+    return;
+  }
   if (event.key === "Escape" && !confirmModal.hidden) {
     closeConfirmModal(false);
     return;
