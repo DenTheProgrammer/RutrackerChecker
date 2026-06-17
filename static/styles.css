@@ -564,6 +564,20 @@ button:disabled {
   fill: none;
 }
 
+.icon .icon-text {
+  fill: currentColor;
+  stroke: none;
+  font-family: "Segoe UI", Arial, sans-serif;
+  font-size: 6px;
+  font-weight: 850;
+  letter-spacing: 0;
+  dominant-baseline: middle;
+}
+
+.icon .icon-slash {
+  stroke-width: 2.6;
+}
+
 @keyframes spin-refresh {
   to {
     transform: rotate(360deg);
