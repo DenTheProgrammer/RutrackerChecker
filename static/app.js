@@ -38,6 +38,9 @@ const runtimeSummary = document.querySelector("#runtimeSummary");
 const nextCheckTime = document.querySelector("#nextCheckTime");
 const nextReminderTime = document.querySelector("#nextReminderTime");
 const lastCheckTime = document.querySelector("#lastCheckTime");
+const startupActions = document.querySelector("#startupActions");
+const startupStatus = document.querySelector("#startupStatus");
+const startupInstallButton = document.querySelector("#startupInstallButton");
 const updateBadge = document.querySelector("#updateBadge");
 const updateText = document.querySelector("#updateText");
 const updateButton = document.querySelector("#updateButton");
@@ -63,6 +66,7 @@ let duplicatePrompting = false;
 let duplicateCheckInFlight = false;
 let pendingDuplicateResolve = null;
 let duplicateInitialSweepDone = false;
+let startupInstallInFlight = false;
 
 const POSTER_POLL_INTERVAL_MS = 3000;
 const POSTER_POLL_DURATION_MS = 60000;
@@ -85,6 +89,7 @@ const icons = {
   image: '<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
   moon: '<path d="M12 3a6 6 0 0 0 9 7.5A9 9 0 1 1 12 3Z"/>',
   plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
+  power: '<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/>',
   refresh: '<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12A9 9 0 0 1 18.5 5.8L21 8"/><path d="M21 3v5h-5"/>',
   reset: '<path class="icon-slash" d="M4.5 18.5 19.5 5.5"/><text class="icon-text" x="12" y="12.5" text-anchor="middle">NEW</text>',
   save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/>',
@@ -299,7 +304,12 @@ function applySettingsToForms() {
 
 function renderRuntime() {
   const runtime = state.runtime || {};
-  runtimePanel.classList.remove("running", "paused", "stale");
+  runtimePanel.classList.remove("running", "paused", "stale", "startup-missing");
+  if (startupActions && startupStatus && startupInstallButton) {
+    startupActions.hidden = true;
+    startupStatus.classList.remove("error");
+    startupInstallButton.hidden = true;
+  }
 
   if (!runtime.background_enabled) {
     runtimePanel.classList.add("paused");
@@ -314,6 +324,15 @@ function renderRuntime() {
     runtimePanel.classList.add("stale");
     runtimeTitle.textContent = "Фон не найден";
     runtimeSummary.textContent = "Запустите фоновой чекер или переустановите автозапуск.";
+  }
+
+  if (runtime.background_enabled && !runtime.startup_installed && startupActions && startupStatus && startupInstallButton) {
+    runtimePanel.classList.add("startup-missing");
+    startupActions.hidden = false;
+    startupStatus.textContent = runtime.startup_status_message || "После перезагрузки фон не запустится.";
+    startupInstallButton.hidden = !runtime.startup_supported;
+    startupInstallButton.disabled = startupInstallInFlight;
+    startupStatus.classList.toggle("error", !runtime.startup_supported);
   }
 
   runtimeDot.title = runtimeTitle.textContent;
@@ -333,6 +352,27 @@ function renderRuntime() {
   lastCheckTime.textContent = runtime.last_check_at
     ? `${formatRelative(runtime.last_check_at)} (${formatClock(runtime.last_check_at)})`
     : "-";
+}
+
+async function installStartup() {
+  if (startupInstallInFlight || !startupInstallButton || !startupStatus) return;
+  startupInstallInFlight = true;
+  startupStatus.classList.remove("error");
+  startupStatus.textContent = "Добавляем в автозагрузку...";
+  setBusy(startupInstallButton, true);
+  try {
+    const payload = await api("/api/startup/install", { method: "POST" });
+    state.runtime = payload.runtime || await api("/api/runtime");
+    renderRuntime();
+  } catch (error) {
+    startupStatus.textContent = `Не удалось включить автозагрузку: ${error.message}`;
+    startupStatus.classList.add("error");
+    if (startupActions) startupActions.hidden = false;
+    startupInstallButton.hidden = false;
+  } finally {
+    startupInstallInFlight = false;
+    setBusy(startupInstallButton, false);
+  }
 }
 
 function renderUpdateStatus() {
@@ -1041,6 +1081,10 @@ themeToggle.addEventListener("click", () => {
 
 backgroundToggle.addEventListener("change", () => {
   saveSettings({ background_enabled: backgroundToggle.checked });
+});
+
+startupInstallButton?.addEventListener("click", () => {
+  installStartup();
 });
 
 for (const eventName of ["input", "change"]) {

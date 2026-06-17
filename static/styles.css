@@ -235,7 +235,7 @@ h1 {
 
 .runtime-strip {
   display: grid;
-  grid-template-columns: minmax(280px, 1fr) minmax(420px, 1.25fr);
+  grid-template-columns: minmax(280px, 1fr) minmax(420px, 1.25fr) minmax(220px, auto);
   gap: 16px;
   align-items: center;
   margin-bottom: 14px;
@@ -285,6 +285,10 @@ h1 {
   box-shadow: 0 0 0 6px var(--danger-soft);
 }
 
+.runtime-strip.startup-missing {
+  border-color: color-mix(in srgb, var(--new) 46%, var(--border));
+}
+
 .runtime-metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -311,6 +315,27 @@ label span {
   margin-top: 5px;
   overflow-wrap: anywhere;
   font-size: 13px;
+}
+
+.runtime-actions {
+  display: grid;
+  gap: 9px;
+  justify-items: end;
+}
+
+.runtime-actions span {
+  color: var(--new);
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: right;
+}
+
+.runtime-actions span.error {
+  color: var(--danger);
+}
+
+.runtime-actions .ghost-button {
+  white-space: nowrap;
 }
 
 .settings-drawer {
@@ -1175,6 +1200,14 @@ button:disabled {
 
   .runtime-strip {
     grid-template-columns: 1fr;
+  }
+
+  .runtime-actions {
+    justify-items: start;
+  }
+
+  .runtime-actions span {
+    text-align: left;
   }
 }
 

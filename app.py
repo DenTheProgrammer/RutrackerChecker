@@ -30,6 +30,9 @@ DB_PATH = DATA_DIR / "app.db"
 STATIC_DIR = BASE_DIR / "static"
 ASSETS_DIR = BASE_DIR / "assets"
 TRAY_SCRIPT_PATH = BASE_DIR / "scripts" / "start-tray.ps1"
+INSTALL_STARTUP_SCRIPT_PATH = BASE_DIR / "install_startup.ps1"
+START_BACKGROUND_TARGET_PATH = BASE_DIR / "start_background.vbs"
+STARTUP_SHORTCUT_NAME = "RutrackerChecker Background.lnk"
 RUTRACKER_BASE_URL = "https://rutracker.org/forum"
 IMDB_BASE_URL = "https://www.imdb.com"
 IMDB_SUGGESTION_BASE_URL = "https://v3.sg.media-imdb.com/suggestion"
@@ -95,6 +98,86 @@ def start_tray_if_background_enabled() -> None:
         )
     except OSError as exc:
         print(f"Could not start tray icon: {exc}")
+
+
+def get_windows_startup_dir() -> Path | None:
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return None
+    return Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+
+
+def read_startup_status(background_enabled: bool | None = None) -> dict[str, Any]:
+    if background_enabled is None:
+        background_enabled = DB.get_setting("background_enabled", "1") == "1"
+
+    startup_dir = get_windows_startup_dir()
+    shortcut_path = startup_dir / STARTUP_SHORTCUT_NAME if startup_dir else None
+    try:
+        startup_dir_ready = bool(startup_dir and startup_dir.exists() and startup_dir.is_dir())
+    except OSError:
+        startup_dir_ready = False
+    target_ready = START_BACKGROUND_TARGET_PATH.exists()
+    installer_ready = INSTALL_STARTUP_SCRIPT_PATH.exists()
+    startup_supported = startup_dir_ready and target_ready and installer_ready
+    startup_installed = bool(shortcut_path and shortcut_path.exists())
+
+    if not startup_dir_ready:
+        message = "Папка автозагрузки Windows недоступна."
+    elif not target_ready:
+        message = "Файл запуска фоновой проверки не найден."
+    elif not installer_ready:
+        message = "Скрипт установки автозагрузки не найден."
+    elif startup_installed:
+        message = "Фоновая проверка запустится после входа в Windows."
+    elif background_enabled:
+        message = "После перезагрузки фон не запустится."
+    else:
+        message = "Фоновая проверка выключена."
+
+    return {
+        "startup_supported": startup_supported,
+        "startup_installed": startup_installed,
+        "startup_shortcut_path": str(shortcut_path) if shortcut_path else "",
+        "startup_target_path": str(START_BACKGROUND_TARGET_PATH),
+        "startup_status_message": message,
+    }
+
+
+def install_startup_autoload() -> dict[str, Any]:
+    if DB.get_setting("background_enabled", "1") != "1":
+        raise ValueError("Фоновая проверка выключена.")
+
+    startup_status = read_startup_status(background_enabled=True)
+    if not startup_status["startup_supported"]:
+        raise RuntimeError(str(startup_status["startup_status_message"]))
+
+    try:
+        result = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(INSTALL_STARTUP_SCRIPT_PATH),
+            ],
+            cwd=BASE_DIR,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"Не удалось включить автозагрузку: {exc}") from exc
+
+    if result.returncode != 0:
+        details = (result.stderr or result.stdout or "").strip()
+        if not details:
+            details = f"PowerShell завершился с кодом {result.returncode}."
+        raise RuntimeError(details)
+
+    return read_runtime_status()
 
 
 DEFAULT_MIN_SEEDERS = config_int("DEFAULT_MIN_SEEDERS", 5)
@@ -2409,11 +2492,13 @@ def read_runtime_status() -> dict[str, Any]:
             if next_reminder_at < now:
                 next_reminder_at = now
 
+    startup_status = read_startup_status(background_enabled=background_enabled)
     return {
         "server_running": True,
         "background_enabled": background_enabled,
         "background_running": background_running,
         "background_process_alive": heartbeat_fresh,
+        **startup_status,
         "background_status_stale_seconds": BACKGROUND_STALE_SECONDS,
         "last_heartbeat_at": heartbeat_at.isoformat() if heartbeat_at else None,
         "last_check_at": payload.get("last_check_at"),
@@ -2635,6 +2720,22 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if not session_id:
                     raise ValueError("session_id is required")
                 self.send_json({"active_ui_sessions": UI_SESSIONS.heartbeat(session_id)})
+                return
+
+            if request_path == "/api/startup/install":
+                try:
+                    runtime = install_startup_autoload()
+                except Exception as exc:
+                    status = HTTPStatus.BAD_REQUEST if isinstance(exc, ValueError) else HTTPStatus.BAD_GATEWAY
+                    self.send_json(
+                        {
+                            "error": str(exc),
+                            "runtime": read_runtime_status(),
+                        },
+                        int(status),
+                    )
+                    return
+                self.send_json({"installed": True, "runtime": runtime})
                 return
 
             if request_path == "/api/update/apply":

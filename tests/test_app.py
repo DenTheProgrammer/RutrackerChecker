@@ -1593,6 +1593,146 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(runtime["pending_new_item_count"], 2)
             db.close()
 
+    def test_runtime_reports_startup_shortcut_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            startup_dir = root / "Startup"
+            startup_dir.mkdir()
+            target_path = root / "start_background.vbs"
+            installer_path = root / "install_startup.ps1"
+            target_path.write_text("' target", encoding="utf-8")
+            installer_path.write_text("# installer", encoding="utf-8")
+            db = Database(root / "app.db")
+            db.set_setting("background_enabled", "1")
+
+            with patch.object(app, "DB", db), patch.object(
+                app,
+                "RUNTIME_STATUS_PATH",
+                root / "runtime_status.json",
+            ), patch.object(
+                app,
+                "START_BACKGROUND_TARGET_PATH",
+                target_path,
+            ), patch.object(
+                app,
+                "INSTALL_STARTUP_SCRIPT_PATH",
+                installer_path,
+            ), patch(
+                "app.get_windows_startup_dir",
+                return_value=startup_dir,
+            ):
+                missing = app.read_runtime_status()
+                (startup_dir / app.STARTUP_SHORTCUT_NAME).write_text("shortcut", encoding="utf-8")
+                installed = app.read_runtime_status()
+
+            self.assertTrue(missing["startup_supported"])
+            self.assertFalse(missing["startup_installed"])
+            self.assertIn("перезагрузки", missing["startup_status_message"])
+            self.assertTrue(installed["startup_supported"])
+            self.assertTrue(installed["startup_installed"])
+            self.assertEqual(
+                installed["startup_shortcut_path"],
+                str(startup_dir / app.STARTUP_SHORTCUT_NAME),
+            )
+            db.close()
+
+    def test_startup_install_api_runs_installer_and_returns_runtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            startup_dir = root / "Startup"
+            startup_dir.mkdir()
+            target_path = root / "start_background.vbs"
+            installer_path = root / "install_startup.ps1"
+            target_path.write_text("' target", encoding="utf-8")
+            installer_path.write_text("# installer", encoding="utf-8")
+            shortcut_path = startup_dir / app.STARTUP_SHORTCUT_NAME
+            db = Database(root / "app.db")
+            db.set_setting("background_enabled", "1")
+
+            def fake_run(*args, **kwargs):
+                shortcut_path.write_text("shortcut", encoding="utf-8")
+                return subprocess.CompletedProcess(args[0], 0, "ok", "")
+
+            with patch.object(app, "DB", db), patch.object(
+                app,
+                "RUNTIME_STATUS_PATH",
+                root / "runtime_status.json",
+            ), patch.object(
+                app,
+                "START_BACKGROUND_TARGET_PATH",
+                target_path,
+            ), patch.object(
+                app,
+                "INSTALL_STARTUP_SCRIPT_PATH",
+                installer_path,
+            ), patch(
+                "app.get_windows_startup_dir",
+                return_value=startup_dir,
+            ), patch(
+                "app.subprocess.run",
+                side_effect=fake_run,
+            ) as run_installer:
+                server = ThreadingHTTPServer(("127.0.0.1", 0), RequestHandler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_port}/api/startup/install",
+                    method="POST",
+                )
+
+                try:
+                    with urllib.request.urlopen(request, timeout=5) as response:
+                        payload = json.loads(response.read().decode("utf-8"))
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    db.close()
+
+            self.assertEqual(response.status, 200)
+            self.assertTrue(payload["installed"])
+            self.assertTrue(payload["runtime"]["startup_installed"])
+            self.assertTrue(shortcut_path.exists())
+            run_installer.assert_called_once()
+
+    def test_startup_install_api_returns_json_error_when_unsupported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = Database(root / "app.db")
+            db.set_setting("background_enabled", "1")
+
+            with patch.object(app, "DB", db), patch.object(
+                app,
+                "RUNTIME_STATUS_PATH",
+                root / "runtime_status.json",
+            ), patch(
+                "app.get_windows_startup_dir",
+                return_value=None,
+            ), patch(
+                "app.subprocess.run",
+                side_effect=AssertionError("installer must not run"),
+            ):
+                server = ThreadingHTTPServer(("127.0.0.1", 0), RequestHandler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_port}/api/startup/install",
+                    method="POST",
+                )
+
+                try:
+                    with self.assertRaises(urllib.error.HTTPError) as context:
+                        urllib.request.urlopen(request, timeout=5)
+                    body = json.loads(context.exception.read().decode("utf-8"))
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    db.close()
+
+            self.assertEqual(context.exception.code, 502)
+            self.assertIn("error", body)
+            self.assertIn("runtime", body)
+            self.assertFalse(body["runtime"]["startup_supported"])
+
 
 if __name__ == "__main__":
     unittest.main()
