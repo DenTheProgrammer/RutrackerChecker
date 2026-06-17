@@ -6,7 +6,7 @@ The app stores state in SQLite, shows `N new` counters per query, and can send T
 
 ## Quick Start
 
-Double-click `RutrackerChecker.exe` if it is present in this folder. It starts the local server and opens the UI in an app window. When you close all UI windows or browser tabs, the local server stops automatically after the idle grace period.
+Double-click `RutrackerChecker.exe` if it is present in this folder. It starts the local server and opens the UI in a native app window. The same UI is still available at http://127.0.0.1:9876/ for manual debugging. When you close all UI windows or browser tabs, the local server stops automatically after the idle grace period.
 
 On first launch, fill in RuTracker username/password in the Settings panel and click `Save settings`. The credentials are saved locally in `data/app.db`. Leave password/token fields empty later to keep saved values.
 
@@ -41,7 +41,7 @@ Open http://127.0.0.1:9876.
 
 ## Background Checks
 
-The UI server only checks while its process is running unless `Keep checking in background` is enabled in Settings. When background checks are enabled, launching `RutrackerChecker.exe` or saving the setting starts the tray icon; when the setting is disabled, the tray icon and background loop stop.
+The UI server only checks while its process is running unless `Keep checking in background` is enabled in Settings. When background checks are enabled, launching `RutrackerChecker.exe` or saving the setting starts the tray icon. Starting it again replaces the existing tray/background loop from this folder instead of creating duplicates. When the setting is disabled, the tray icon and background loop stop.
 
 For unattended checks after Windows logon, install the Windows Startup background entry:
 

@@ -15,11 +15,57 @@ $BundledPython = Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary
 $Python = $null
 $TrayMutexName = "Local\RutrackerCheckerTray"
 $TrayMutexCreated = $false
-$TrayMutex = New-Object System.Threading.Mutex($true, $TrayMutexName, [ref]$TrayMutexCreated)
+$TrayMutex = $null
 
+function Get-RootProcessesByPattern {
+    param([string[]]$Patterns)
+    return @(Get-CimInstance Win32_Process |
+        Where-Object {
+            if (-not $_.CommandLine -or $_.ProcessId -eq $PID) {
+                return $false
+            }
+            if ($_.CommandLine -notlike "*$Root*") {
+                return $false
+            }
+            foreach ($Pattern in $Patterns) {
+                if ($_.CommandLine -like $Pattern) {
+                    return $true
+                }
+            }
+            return $false
+        })
+}
+
+function Stop-RootProcessesByPattern {
+    param([string[]]$Patterns)
+    foreach ($Process in (Get-RootProcessesByPattern $Patterns)) {
+        try {
+            Stop-Process -Id $Process.ProcessId -Force
+        } catch {
+        }
+    }
+}
+
+function New-TrayMutex {
+    $script:TrayMutexCreated = $false
+    $script:TrayMutex = New-Object System.Threading.Mutex($true, $TrayMutexName, [ref]$script:TrayMutexCreated)
+}
+
+New-TrayMutex
 if (-not $TrayMutexCreated) {
     $TrayMutex.Dispose()
-    exit 0
+    Stop-RootProcessesByPattern @("*start-tray.ps1*")
+    for ($i = 0; $i -lt 20; $i++) {
+        Start-Sleep -Milliseconds 150
+        New-TrayMutex
+        if ($TrayMutexCreated) {
+            break
+        }
+        $TrayMutex.Dispose()
+    }
+    if (-not $TrayMutexCreated) {
+        exit 0
+    }
 }
 
 if (-not ("NativeIconMethods" -as [type])) {
@@ -46,12 +92,7 @@ function Find-Python {
 
 function Test-ProcessCommandLine {
     param([string]$Pattern)
-    return @(Get-CimInstance Win32_Process |
-        Where-Object {
-            $_.ProcessId -ne $PID -and
-            $_.CommandLine -like $Pattern -and
-            $_.CommandLine -like "*$Root*"
-        }).Count -gt 0
+    return (Get-RootProcessesByPattern @($Pattern)).Count -gt 0
 }
 
 $Python = Find-Python
@@ -70,10 +111,14 @@ if (-not (Test-Path $DataDir)) {
 }
 
 function Start-BackgroundLoop {
+    param([switch]$Replace)
+
     if (-not (Get-BackgroundEnabled)) {
         return
     }
-    if (Test-ProcessCommandLine "*background_loop.py*") {
+    if ($Replace) {
+        Stop-RootProcessesByPattern @("*background_loop.py*")
+    } elseif (Test-ProcessCommandLine "*background_loop.py*") {
         return
     }
     $OutLog = Join-Path $DataDir "background.out.log"
@@ -329,7 +374,7 @@ try {
         return
     }
 
-    Start-BackgroundLoop
+    Start-BackgroundLoop -Replace
 
     $NotifyIcon = New-Object System.Windows.Forms.NotifyIcon
     $NotifyIcon.Text = "RuTracker Checker"
@@ -353,7 +398,7 @@ try {
     $NotifyIcon.Add_DoubleClick({ Open-Ui })
     $CheckItem.Add_Click({ Invoke-CheckNow })
     $PauseItem.Add_Click({ Set-BackgroundEnabled $false; [System.Windows.Forms.Application]::Exit() })
-    $ResumeItem.Add_Click({ Set-BackgroundEnabled $true; Start-BackgroundLoop })
+    $ResumeItem.Add_Click({ Set-BackgroundEnabled $true; Start-BackgroundLoop -Replace })
     $RefreshItem.Add_Click({ Update-Tray })
     $ExitItem.Add_Click({ Exit-App })
 
