@@ -304,6 +304,10 @@ function applySettingsToForms() {
 
 function renderRuntime() {
   const runtime = state.runtime || {};
+  if (startupInstallInFlight && runtime.startup_installed) {
+    startupInstallInFlight = false;
+    setBusy(startupInstallButton, false);
+  }
   runtimePanel.classList.remove("running", "paused", "stale", "startup-missing");
   if (startupActions && startupStatus && startupInstallButton) {
     startupActions.hidden = true;
