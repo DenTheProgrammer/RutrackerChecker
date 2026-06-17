@@ -425,6 +425,48 @@ class DatabaseTests(unittest.TestCase):
             )
             db.close()
 
+    def test_metadata_backfill_can_restart_after_previous_run_finishes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            started = threading.Event()
+            release = threading.Event()
+            calls = []
+
+            def fake_refresh(db_arg):
+                calls.append(db_arg)
+                started.set()
+                release.wait(3)
+                return 0
+
+            with patch.object(app, "DB", db), patch.object(
+                app,
+                "METADATA_BACKFILL_RUNNING",
+                False,
+            ), patch("app.refresh_missing_posters", side_effect=fake_refresh):
+                try:
+                    app.start_metadata_backfill()
+                    self.assertTrue(started.wait(1))
+                    app.start_metadata_backfill()
+                    self.assertEqual(len(calls), 1)
+                finally:
+                    release.set()
+
+                deadline = time.monotonic() + 3
+                while app.METADATA_BACKFILL_RUNNING and time.monotonic() < deadline:
+                    time.sleep(0.01)
+
+                started.clear()
+                release.clear()
+                app.start_metadata_backfill()
+                self.assertTrue(started.wait(1))
+                release.set()
+                deadline = time.monotonic() + 3
+                while app.METADATA_BACKFILL_RUNNING and time.monotonic() < deadline:
+                    time.sleep(0.01)
+
+            self.assertEqual(len(calls), 2)
+            db.close()
+
     def test_create_item_api_requires_rutracker_credentials(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / "app.db")

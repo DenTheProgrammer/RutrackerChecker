@@ -1629,7 +1629,7 @@ UI_SESSIONS = UiSessionRegistry()
 ITEM_CHECKS = ItemCheckRegistry()
 CHECK_ALL = CheckAllRegistry()
 SERVER: ThreadingHTTPServer | None = None
-METADATA_BACKFILL_STARTED = False
+METADATA_BACKFILL_RUNNING = False
 METADATA_BACKFILL_LOCK = threading.Lock()
 
 
@@ -1645,19 +1645,23 @@ def request_shutdown(reason: str = "requested") -> None:
 
 
 def start_metadata_backfill() -> None:
-    global METADATA_BACKFILL_STARTED
+    global METADATA_BACKFILL_RUNNING
     with METADATA_BACKFILL_LOCK:
-        if METADATA_BACKFILL_STARTED:
+        if METADATA_BACKFILL_RUNNING:
             return
-        METADATA_BACKFILL_STARTED = True
+        METADATA_BACKFILL_RUNNING = True
 
     def worker() -> None:
+        global METADATA_BACKFILL_RUNNING
         try:
             count = refresh_missing_posters(DB)
             if count:
                 print(f"Poster backfill refreshed {count} item(s)")
         except Exception as exc:
             print(f"Poster backfill failed: {exc}")
+        finally:
+            with METADATA_BACKFILL_LOCK:
+                METADATA_BACKFILL_RUNNING = False
 
     threading.Thread(target=worker, daemon=True).start()
 
