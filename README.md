@@ -68,9 +68,9 @@ If you prefer Windows Task Scheduler instead, `install_task.ps1` and `uninstall_
 - `DEFAULT_CHECK_INTERVAL_MINUTES`: background check interval. Set to `0` to disable scheduled checks.
 - `DEFAULT_REMINDER_INTERVAL_HOURS`: pending-release reminder interval. Set to `0` to disable reminders.
 - `MAX_SEARCH_PAGES`: how many RuTracker result pages to scan per query.
-- `RUTRACKER_REQUEST_ATTEMPTS`: retry attempts for each RuTracker HTTP request; default is `3`.
-- `RUTRACKER_REQUEST_TIMEOUT_SECONDS`: per-request RuTracker timeout; default is `12`.
-- `RUTRACKER_RETRY_BASE_SECONDS`: base delay between RuTracker request retries; default is `1`.
+- `RUTRACKER_REQUEST_ATTEMPTS`: retry attempts for each RuTracker HTTP request; default is `8`.
+- `RUTRACKER_REQUEST_TIMEOUT_SECONDS`: per-request RuTracker timeout; default is `2`.
+- `RUTRACKER_RETRY_BASE_SECONDS`: base delay between RuTracker request retries; default is `0`.
 - `INITIAL_ITEM_CHECK_ATTEMPTS`: attempts for the first background check after adding a new item; default is `2`.
 - `INITIAL_ITEM_CHECK_RETRY_SECONDS`: delay between those new-item attempts; default is `3`.
 - `CHECK_ALL_MAX_WORKERS`: simultaneous RuTracker requests for the manual "check all" action; default is `3`. All enabled cards enter the checking state immediately, but requests are limited to this worker count.

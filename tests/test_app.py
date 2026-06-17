@@ -768,14 +768,18 @@ class DatabaseTests(unittest.TestCase):
             with patch.object(app.time, "sleep") as sleep, patch.object(
                 app,
                 "RUTRACKER_REQUEST_TIMEOUT_SECONDS",
-                12,
+                2,
+            ), patch.object(
+                app,
+                "RUTRACKER_RETRY_BASE_SECONDS",
+                0,
             ):
                 html = client.request("https://rutracker.org/forum/tracker.php", attempts=2)
 
             self.assertEqual(html, "ok")
             self.assertEqual(opener.calls, 2)
-            self.assertEqual(opener.timeouts, [12, 12])
-            sleep.assert_called_once_with(1)
+            self.assertEqual(opener.timeouts, [2, 2])
+            sleep.assert_not_called()
             db.close()
 
     def test_pending_results_that_fail_current_filter_are_cleared(self):
