@@ -67,6 +67,10 @@ button {
   cursor: pointer;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 .app-header {
   position: sticky;
   top: 0;
