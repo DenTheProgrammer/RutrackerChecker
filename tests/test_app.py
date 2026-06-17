@@ -474,6 +474,32 @@ class DatabaseTests(unittest.TestCase):
 
             backfill.assert_called_once()
 
+    def test_app_icon_assets_are_served(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            with patch.object(app, "DB", db):
+                server = ThreadingHTTPServer(("127.0.0.1", 0), RequestHandler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    for route, content_type, asset_name in [
+                        ("/assets/app-icon.png", "image/png", "app-icon.png"),
+                        ("/favicon.ico", "image/x-icon", "app-icon.ico"),
+                    ]:
+                        with urllib.request.urlopen(
+                            f"http://127.0.0.1:{server.server_port}{route}",
+                            timeout=5,
+                        ) as response:
+                            payload = response.read()
+
+                        self.assertEqual(response.status, 200)
+                        self.assertEqual(response.headers.get_content_type(), content_type)
+                        self.assertEqual(payload, (app.ASSETS_DIR / asset_name).read_bytes())
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    db.close()
+
     def test_items_api_does_not_start_metadata_backfill(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / "app.db")

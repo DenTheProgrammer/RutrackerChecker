@@ -25,6 +25,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "app.db"
 STATIC_DIR = BASE_DIR / "static"
+ASSETS_DIR = BASE_DIR / "assets"
 TRAY_SCRIPT_PATH = BASE_DIR / "scripts" / "start-tray.ps1"
 RUTRACKER_BASE_URL = "https://rutracker.org/forum"
 IMDB_BASE_URL = "https://www.imdb.com"
@@ -1511,6 +1512,14 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def send_bytes(self, data: bytes, status: int = 200, content_type: str = "application/octet-stream") -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length") or "0")
         if length == 0:
@@ -1530,13 +1539,15 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         try:
-            if self.path == "/" or self.path.startswith("/?"):
+            request_path = urllib.parse.urlparse(self.path).path
+
+            if request_path == "/":
                 start_metadata_backfill()
                 index = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
                 self.send_text(index, content_type="text/html")
                 return
 
-            if self.path == "/api/items":
+            if request_path == "/api/items":
                 items = DB.list_items()
                 public_settings = DB.get_public_settings()
                 for item in items:
@@ -1553,15 +1564,15 @@ class RequestHandler(BaseHTTPRequestHandler):
                 )
                 return
 
-            if self.path == "/api/settings":
+            if request_path == "/api/settings":
                 self.send_json(DB.get_public_settings())
                 return
 
-            if self.path == "/api/runtime":
+            if request_path == "/api/runtime":
                 self.send_json(read_runtime_status())
                 return
 
-            if self.path == "/api/health":
+            if request_path == "/api/health":
                 runtime = read_runtime_status()
                 self.send_json(
                     {
@@ -1575,7 +1586,29 @@ class RequestHandler(BaseHTTPRequestHandler):
                 )
                 return
 
-            static_match = re.match(r"^/static/([A-Za-z0-9_.-]+)$", self.path)
+            if request_path == "/favicon.ico":
+                path = ASSETS_DIR / "app-icon.ico"
+                if not path.exists():
+                    self.send_json({"error": "not found"}, 404)
+                    return
+                self.send_bytes(path.read_bytes(), content_type="image/x-icon")
+                return
+
+            asset_match = re.match(r"^/assets/([A-Za-z0-9_.-]+)$", request_path)
+            if asset_match:
+                filename = asset_match.group(1)
+                path = ASSETS_DIR / filename
+                if not path.exists() or not path.is_file():
+                    self.send_json({"error": "not found"}, 404)
+                    return
+                content_type = {
+                    ".ico": "image/x-icon",
+                    ".png": "image/png",
+                }.get(path.suffix.lower(), "application/octet-stream")
+                self.send_bytes(path.read_bytes(), content_type=content_type)
+                return
+
+            static_match = re.match(r"^/static/([A-Za-z0-9_.-]+)$", request_path)
             if static_match:
                 filename = static_match.group(1)
                 path = STATIC_DIR / filename
