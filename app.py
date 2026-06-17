@@ -19,7 +19,7 @@ from http import HTTPStatus
 from http.cookiejar import CookieJar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -1431,15 +1431,66 @@ class CheckerService:
             return exc.code in RETRYABLE_HTTP_STATUS_CODES
         return isinstance(exc, TransientRuTrackerError)
 
-    def check_all(self, notify: bool = True) -> dict[str, Any]:
-        summaries = []
-        for item in self.db.list_items():
-            if not item["enabled"]:
-                continue
-            try:
-                summaries.append(self.check_item(int(item["id"]), notify=notify))
-            except Exception as exc:
-                summaries.append({"item": item, "error": str(exc), "new": 0, "matched": 0})
+    def check_all(
+        self,
+        notify: bool = True,
+        items: list[dict[str, Any]] | None = None,
+        max_workers: int | None = None,
+        before_item: Callable[[int], None] | None = None,
+        after_item: Callable[[int, dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        check_items = list(items) if items is not None else [
+            item for item in self.db.list_items() if item["enabled"]
+        ]
+        summaries: list[dict[str, Any]] = []
+        summaries_lock = threading.Lock()
+        work_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+        for item in check_items:
+            work_queue.put(item)
+
+        def check_next() -> None:
+            while True:
+                try:
+                    item = work_queue.get_nowait()
+                except queue.Empty:
+                    return
+
+                item_id = int(item["id"])
+                if before_item:
+                    before_item(item_id)
+                try:
+                    result = self.check_item_with_retries(item_id, notify=notify)
+                except Exception as exc:
+                    current_item = self.db.get_item(item_id) or item
+                    result = {
+                        "item": current_item,
+                        "error": str(exc),
+                        "new": 0,
+                        "matched": 0,
+                        "pending_new": self.db.count_new(item_id) if current_item else 0,
+                        "search_url": RuTrackerClient.search_url(current_item["query"])
+                        if current_item
+                        else "",
+                    }
+                finally:
+                    work_queue.task_done()
+
+                with summaries_lock:
+                    summaries.append(result)
+                if after_item:
+                    after_item(item_id, result)
+                self.db.close()
+
+        worker_count = min(max(1, max_workers or CHECK_ALL_MAX_WORKERS), len(check_items))
+        workers = [
+            threading.Thread(target=check_next, daemon=True)
+            for _ in range(worker_count)
+        ]
+        for thread in workers:
+            thread.start()
+        for thread in workers:
+            thread.join()
+
         return {
             "items_checked": len(summaries),
             "total_new": sum(int(summary.get("new", 0)) for summary in summaries),
@@ -1657,54 +1708,24 @@ def start_background_check_all() -> bool:
             pending_items.append(item)
 
     def worker() -> None:
-        summaries: list[dict[str, Any]] = []
-        summaries_lock = threading.Lock()
-        work_queue: queue.Queue[dict[str, Any]] = queue.Queue()
-        for item in pending_items:
-            work_queue.put(item)
+        summary = build_check_all_summary([])
 
-        def check_next() -> None:
-            while True:
-                try:
-                    item = work_queue.get_nowait()
-                except queue.Empty:
-                    return
+        def activate_item(item_id: int) -> None:
+            ITEM_CHECKS.activate(item_id)
 
-                item_id = int(item["id"])
-                ITEM_CHECKS.activate(item_id)
-                try:
-                    result = CHECKER.check_item_with_retries(item_id, notify=True)
-                except Exception as exc:
-                    current_item = DB.get_item(item_id) or item
-                    result = {
-                        "item": current_item,
-                        "error": str(exc),
-                        "new": 0,
-                        "matched": 0,
-                        "pending_new": DB.count_new(item_id) if current_item else 0,
-                        "search_url": RuTrackerClient.search_url(current_item["query"])
-                        if current_item
-                        else "",
-                    }
-                finally:
-                    work_queue.task_done()
-
-                with summaries_lock:
-                    summaries.append(result)
-                ITEM_CHECKS.finish(item_id, result)
-                DB.close()
+        def finish_item(item_id: int, result: dict[str, Any]) -> None:
+            ITEM_CHECKS.finish(item_id, result)
 
         try:
-            workers = [
-                threading.Thread(target=check_next, daemon=True)
-                for _ in range(min(CHECK_ALL_MAX_WORKERS, len(pending_items)))
-            ]
-            for thread in workers:
-                thread.start()
-            for thread in workers:
-                thread.join()
+            summary = CHECKER.check_all(
+                notify=True,
+                items=pending_items,
+                max_workers=CHECK_ALL_MAX_WORKERS,
+                before_item=activate_item,
+                after_item=finish_item,
+            )
         finally:
-            CHECK_ALL.finish(build_check_all_summary(summaries))
+            CHECK_ALL.finish(summary)
 
     threading.Thread(target=worker, daemon=True).start()
     return True

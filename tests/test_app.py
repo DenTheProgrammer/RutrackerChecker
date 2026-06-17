@@ -660,6 +660,48 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(db.count_new(item["id"]), 1)
             db.close()
 
+    def test_check_all_uses_item_retry_logic(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            item = db.create_item({"title": "Drama", "query": "Drama 2026"})
+
+            class FlakyClient:
+                def __init__(self) -> None:
+                    self.calls = 0
+
+                def search(self, query):
+                    self.calls += 1
+                    if self.calls == 1:
+                        raise TransientRuTrackerError("RuTracker is busy")
+                    return [
+                        SearchResult(
+                            topic_id="111",
+                            title="Drama 2026 WEB-DL 1080p",
+                            url="https://rutracker.org/forum/viewtopic.php?t=111",
+                            seeders=10,
+                            resolution="1080p",
+                            size_bytes=8 * 1024**3,
+                            size_label="8 GB",
+                        )
+                    ]
+
+            class FakeNotifier:
+                def send_new_results(self, item, rows):
+                    pass
+
+            client = FlakyClient()
+            service = CheckerService(db, client, FakeNotifier())
+            with patch.object(app.time, "sleep") as sleep:
+                summary = service.check_all(max_workers=1)
+
+            self.assertEqual(client.calls, 2)
+            self.assertEqual(sleep.call_count, 1)
+            self.assertEqual(summary["items_checked"], 1)
+            self.assertEqual(summary["results"][0]["attempts"], 2)
+            self.assertEqual(summary["total_new"], 1)
+            self.assertEqual(db.count_new(item["id"]), 1)
+            db.close()
+
     def test_background_check_all_marks_all_items_active_until_each_finishes(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / "app.db")
@@ -669,25 +711,21 @@ class DatabaseTests(unittest.TestCase):
             ]
             release_checks = threading.Event()
 
-            class WaitingChecker:
-                def check_item_with_retries(self, item_id, notify=True):
+            class WaitingClient:
+                def search(self, query):
                     release_checks.wait(30)
-                    item = db.get_item(item_id)
-                    return {
-                        "item": item,
-                        "raw": 0,
-                        "matched": 0,
-                        "new": 0,
-                        "pending_new": 0,
-                        "search_url": "",
-                    }
+                    return []
+
+            class FakeNotifier:
+                def send_new_results(self, item, rows):
+                    pass
 
             item_checks = app.ItemCheckRegistry()
             check_all = app.CheckAllRegistry()
             with patch.object(app, "DB", db), patch.object(
                 app,
                 "CHECKER",
-                WaitingChecker(),
+                CheckerService(db, WaitingClient(), FakeNotifier()),
             ), patch.object(app, "ITEM_CHECKS", item_checks), patch.object(
                 app,
                 "CHECK_ALL",
