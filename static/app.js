@@ -11,6 +11,11 @@ const movieModal = document.querySelector("#movieModal");
 const movieForm = document.querySelector("#movieForm");
 const modalTitle = document.querySelector("#modalTitle");
 const modalCloseButton = document.querySelector("#modalCloseButton");
+const confirmModal = document.querySelector("#confirmModal");
+const confirmTitle = document.querySelector("#confirmTitle");
+const confirmMessage = document.querySelector("#confirmMessage");
+const confirmOkButton = document.querySelector("#confirmOkButton");
+const confirmCancelButton = document.querySelector("#confirmCancelButton");
 const movieAdvanced = document.querySelector("#movieAdvanced");
 const movieSubmitLabel = document.querySelector("#movieSubmitLabel");
 const metadataButton = document.querySelector("#metadataButton");
@@ -45,6 +50,7 @@ let isHydratingSettings = false;
 let posterPollTimer = null;
 let posterPollDeadline = 0;
 let posterPollInFlight = false;
+let pendingConfirm = null;
 
 const POSTER_POLL_INTERVAL_MS = 3000;
 const POSTER_POLL_DURATION_MS = 60000;
@@ -513,6 +519,30 @@ function closeMovieModal() {
   movieModal.hidden = true;
 }
 
+function closeConfirmModal(result = false) {
+  if (confirmModal.hidden) return;
+  confirmModal.hidden = true;
+  const resolver = pendingConfirm;
+  pendingConfirm = null;
+  if (resolver) {
+    resolver(Boolean(result));
+  }
+}
+
+function showConfirmDialog({ title, message, confirmLabel = "Удалить" }) {
+  if (pendingConfirm) {
+    closeConfirmModal(false);
+  }
+  confirmTitle.textContent = title;
+  confirmMessage.textContent = message;
+  confirmOkButton.textContent = confirmLabel;
+  confirmModal.hidden = false;
+  setTimeout(() => confirmCancelButton.focus(), 0);
+  return new Promise((resolve) => {
+    pendingConfirm = resolve;
+  });
+}
+
 async function saveMovie(event) {
   event.preventDefault();
   if (!movieForm.elements.id.value && !hasCredentials()) {
@@ -600,7 +630,13 @@ async function resetNew(item) {
 }
 
 async function deleteItem(item) {
-  if (!confirm(`Удалить "${item.title || item.query}"?`)) return;
+  const title = item.title || item.query;
+  const confirmed = await showConfirmDialog({
+    title: "Удалить карточку?",
+    message: `«${title}» будет удален из отслеживания вместе с найденными результатами.`,
+    confirmLabel: "Удалить",
+  });
+  if (!confirmed) return;
   await api(`/api/items/${item.id}`, { method: "DELETE" });
   await load();
 }
@@ -893,7 +929,18 @@ movieModal.addEventListener("click", (event) => {
   if (event.target === movieModal) closeMovieModal();
 });
 
+confirmModal.addEventListener("click", (event) => {
+  if (event.target === confirmModal) closeConfirmModal(false);
+});
+
+confirmCancelButton.addEventListener("click", () => closeConfirmModal(false));
+confirmOkButton.addEventListener("click", () => closeConfirmModal(true));
+
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !confirmModal.hidden) {
+    closeConfirmModal(false);
+    return;
+  }
   if (event.key === "Escape" && !movieModal.hidden) closeMovieModal();
 });
 

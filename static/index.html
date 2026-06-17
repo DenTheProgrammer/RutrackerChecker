@@ -216,6 +216,22 @@
     </section>
   </div>
 
+  <div id="confirmModal" class="modal-backdrop" hidden>
+    <section class="modal confirm-modal" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMessage">
+      <div class="confirm-mark">
+        <span data-icon="trash"></span>
+      </div>
+      <div class="modal-heading confirm-heading">
+        <h2 id="confirmTitle">Подтвердите действие</h2>
+        <p id="confirmMessage"></p>
+      </div>
+      <div class="modal-actions confirm-actions">
+        <button id="confirmCancelButton" class="ghost-button" type="button">Отмена</button>
+        <button id="confirmOkButton" class="primary-button danger-action" type="button">Удалить</button>
+      </div>
+    </section>
+  </div>
+
   <script src="/static/app.js"></script>
 </body>
 </html>

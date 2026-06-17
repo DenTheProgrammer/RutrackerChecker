@@ -935,6 +935,59 @@ button:disabled {
   padding: 22px;
 }
 
+.confirm-modal {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 18px;
+  width: min(460px, 100%);
+  padding: 24px;
+  overflow: visible;
+}
+
+.confirm-mark {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border: 1px solid color-mix(in srgb, var(--danger) 42%, transparent);
+  border-radius: 14px;
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.confirm-mark .icon {
+  width: 22px;
+  height: 22px;
+}
+
+.confirm-heading {
+  padding-right: 0;
+}
+
+.confirm-heading h2 {
+  font-size: 20px;
+}
+
+.confirm-heading p {
+  max-width: 34ch;
+  line-height: 1.45;
+}
+
+.confirm-actions {
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.danger-action {
+  background: var(--danger);
+  color: #fff;
+}
+
+.danger-action:hover {
+  background: color-mix(in srgb, var(--danger) 84%, #000);
+}
+
 .modal-close {
   position: absolute;
   top: 16px;
