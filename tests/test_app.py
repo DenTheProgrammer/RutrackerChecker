@@ -427,21 +427,16 @@ class DatabaseTests(unittest.TestCase):
     def test_create_item_api_requires_rutracker_credentials(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / "app.db")
-            class FakeChecker:
-                def __init__(self) -> None:
-                    self.calls = []
+            started_checks = []
 
-                def check_new_item_with_retries(self, item_id, notify=True):
-                    self.calls.append((item_id, notify))
-                    return {
-                        "item": db.get_item(item_id),
-                        "new": 0,
-                        "matched": 0,
-                        "pending_new": 0,
-                    }
+            def fake_start_background_item_check(item_id):
+                started_checks.append(item_id)
+                return True
 
-            fake_checker = FakeChecker()
-            with patch.object(app, "DB", db), patch.object(app, "CHECKER", fake_checker):
+            with patch.object(app, "DB", db), patch(
+                "app.start_background_item_check",
+                side_effect=fake_start_background_item_check,
+            ):
                 server = ThreadingHTTPServer(("127.0.0.1", 0), RequestHandler)
                 thread = threading.Thread(target=server.serve_forever, daemon=True)
                 thread.start()
@@ -469,8 +464,8 @@ class DatabaseTests(unittest.TestCase):
 
                     self.assertEqual(response.status, 201)
                     self.assertEqual(payload["query"], "Drama 2026")
-                    self.assertEqual(fake_checker.calls, [(payload["id"], True)])
-                    self.assertIn("initial_check", payload)
+                    self.assertEqual(started_checks, [payload["id"]])
+                    self.assertTrue(payload["initial_check_started"])
                 finally:
                     server.shutdown()
                     server.server_close()

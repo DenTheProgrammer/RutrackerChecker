@@ -29,6 +29,11 @@ const lastCheckTime = document.querySelector("#lastCheckTime");
 
 let state = { items: [], config: {}, runtime: {} };
 let lastChecks = new Map();
+let serverCheckIds = new Set();
+let localCheckIds = new Set();
+let checkPollTimer = null;
+let checkPollDeadline = 0;
+let checkPollInFlight = false;
 let settingsSaveTimer = null;
 let isHydratingSettings = false;
 let posterPollTimer = null;
@@ -37,6 +42,8 @@ let posterPollInFlight = false;
 
 const POSTER_POLL_INTERVAL_MS = 3000;
 const POSTER_POLL_DURATION_MS = 60000;
+const CHECK_POLL_INTERVAL_MS = 2000;
+const CHECK_POLL_DURATION_MS = 120000;
 const RECENT_METADATA_ATTEMPT_MS = 24 * 60 * 60 * 1000;
 const SECRET_PLACEHOLDER = "••••••••••••";
 
@@ -86,6 +93,7 @@ async function api(path, options = {}) {
 function setBusy(button, busy, text) {
   if (!button) return;
   button.disabled = busy;
+  button.classList.toggle("is-checking", busy);
   if (busy && text) {
     button.dataset.originalHtml ||= button.innerHTML;
     button.textContent = text;
@@ -95,6 +103,22 @@ function setBusy(button, busy, text) {
     delete button.dataset.originalHtml;
     hydrateIcons(button);
   }
+}
+
+function numberSet(values = []) {
+  return new Set(values.map((value) => Number(value)).filter(Number.isFinite));
+}
+
+function isItemChecking(itemId) {
+  const id = Number(itemId);
+  return serverCheckIds.has(id) || localCheckIds.has(id);
+}
+
+function syncCheckPayload(payload = {}) {
+  for (const result of payload.check_results || []) {
+    rememberCheck(result);
+  }
+  serverCheckIds = numberSet(payload.checking_item_ids || []);
 }
 
 function parseDate(value) {
@@ -293,6 +317,7 @@ function renderCards() {
 function createMovieCard(item) {
   const card = document.createElement("article");
   card.className = "movie-card";
+  const checking = isItemChecking(item.id);
 
   const main = document.createElement("button");
   main.type = "button";
@@ -341,7 +366,11 @@ function createMovieCard(item) {
     meta.append(chip);
   }
   const lastCheck = lastChecks.get(item.id);
-  if (lastCheck) {
+  if (checking) {
+    const chip = document.createElement("span");
+    chip.textContent = "проверяем";
+    meta.append(chip);
+  } else if (lastCheck) {
     const chip = document.createElement("span");
     chip.textContent = lastCheck.error ? "ошибка" : "проверено";
     meta.append(chip);
@@ -359,6 +388,14 @@ function createMovieCard(item) {
     cardButton("external", "IMDb", () => window.open(item.imdb_url, "_blank", "noreferrer"), !item.imdb_url),
     cardButton("trash", "Удалить", () => deleteItem(item), false, "danger-button"),
   );
+
+  if (checking) {
+    const refreshButton = actions.querySelector("button:nth-child(2)");
+    if (refreshButton) {
+      refreshButton.disabled = true;
+      refreshButton.classList.add("is-checking");
+    }
+  }
 
   card.append(main, actions);
   return card;
@@ -441,11 +478,14 @@ async function saveMovie(event) {
     const item = id
       ? await api(`/api/items/${id}`, { method: "PATCH", body: JSON.stringify(data) })
       : await api("/api/items", { method: "POST", body: JSON.stringify(data) });
-    if (item.initial_check) {
-      rememberCheck(item.initial_check);
+    if (!id && item.initial_check_started) {
+      serverCheckIds.add(Number(item.id));
     }
     closeMovieModal();
     await load();
+    if (!id && item.initial_check_started) {
+      startCheckPolling();
+    }
     if (!data.poster_url) {
       refreshMetadata(item.id);
     }
@@ -474,15 +514,22 @@ async function refreshMetadata(itemId = movieForm.elements.id.value) {
 }
 
 async function checkItem(item) {
+  const itemId = Number(item.id);
+  localCheckIds.add(itemId);
+  renderCards();
   statusLine.textContent = `Проверяем: ${item.title || item.query}`;
   try {
     const result = await api(`/api/items/${item.id}/check`, { method: "POST" });
     rememberCheck(result);
     await load();
-    statusLine.textContent = `Проверка: ${result.matched || 0} совпадений, ${result.new || 0} новых.`;
+    statusLine.textContent = result.error
+      ? `Ошибка проверки: ${result.error}`
+      : `Проверка: ${result.raw || 0} найдено, ${result.matched || 0} подходит, ${result.new || 0} новых.`;
   } catch (error) {
     lastChecks.set(item.id, { error: true, message: error.message });
     statusLine.textContent = `Ошибка проверки: ${error.message}`;
+  } finally {
+    localCheckIds.delete(itemId);
     renderCards();
   }
 }
@@ -513,9 +560,55 @@ async function load() {
     api("/api/items"),
     api("/api/runtime"),
   ]);
+  syncCheckPayload(itemsPayload);
   state = { ...itemsPayload, runtime: runtimePayload };
   render();
   startPosterPolling();
+  startCheckPolling();
+}
+
+function stopCheckPolling() {
+  if (checkPollTimer) {
+    clearInterval(checkPollTimer);
+    checkPollTimer = null;
+  }
+  checkPollDeadline = 0;
+  checkPollInFlight = false;
+}
+
+async function refreshItemsForChecks() {
+  if (checkPollInFlight) return;
+  if (Date.now() >= checkPollDeadline || serverCheckIds.size <= 0) {
+    stopCheckPolling();
+    return;
+  }
+
+  checkPollInFlight = true;
+  try {
+    const itemsPayload = await api("/api/items");
+    syncCheckPayload(itemsPayload);
+    state = {
+      ...state,
+      items: itemsPayload.items || [],
+      config: itemsPayload.config || state.config,
+    };
+    renderCards();
+    if (serverCheckIds.size <= 0) {
+      stopCheckPolling();
+    }
+  } catch (error) {
+    stopCheckPolling();
+  } finally {
+    checkPollInFlight = false;
+  }
+}
+
+function startCheckPolling() {
+  if (serverCheckIds.size <= 0) return;
+  checkPollDeadline = Date.now() + CHECK_POLL_DURATION_MS;
+  if (checkPollTimer) return;
+  checkPollTimer = setInterval(refreshItemsForChecks, CHECK_POLL_INTERVAL_MS);
+  refreshItemsForChecks();
 }
 
 function stopPosterPolling() {
@@ -537,6 +630,7 @@ async function refreshItemsForPosters() {
   posterPollInFlight = true;
   try {
     const itemsPayload = await api("/api/items");
+    syncCheckPayload(itemsPayload);
     state = {
       ...state,
       items: itemsPayload.items || [],
@@ -678,7 +772,14 @@ settingsForm.addEventListener("change", (event) => {
 });
 
 checkAllButton.addEventListener("click", async () => {
-  setBusy(checkAllButton, true, "Проверяем");
+  const checkAllIds = (state.items || [])
+    .filter((item) => item.enabled)
+    .map((item) => Number(item.id));
+  for (const itemId of checkAllIds) {
+    localCheckIds.add(itemId);
+  }
+  renderCards();
+  setBusy(checkAllButton, true);
   try {
     const summary = await api("/api/check-all", { method: "POST" });
     for (const result of summary.results || []) {
@@ -693,6 +794,10 @@ checkAllButton.addEventListener("click", async () => {
   } catch (error) {
     statusLine.textContent = `Проверка не удалась: ${error.message}`;
   } finally {
+    for (const itemId of checkAllIds) {
+      localCheckIds.delete(itemId);
+    }
+    renderCards();
     setBusy(checkAllButton, false);
   }
 });

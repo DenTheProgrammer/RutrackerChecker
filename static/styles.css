@@ -521,6 +521,16 @@ button:disabled {
   fill: none;
 }
 
+@keyframes spin-refresh {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.is-checking .icon {
+  animation: spin-refresh 900ms linear infinite;
+}
+
 .shelf-heading {
   display: flex;
   align-items: end;

@@ -1454,6 +1454,44 @@ NOTIFIER = TelegramNotifier(DB)
 CHECKER = CheckerService(DB, CLIENT, NOTIFIER)
 
 
+class ItemCheckRegistry:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._active: set[int] = set()
+        self._completed: dict[int, tuple[float, dict[str, Any]]] = {}
+
+    def start(self, item_id: int) -> bool:
+        with self._lock:
+            if item_id in self._active:
+                return False
+            self._active.add(item_id)
+            return True
+
+    def finish(self, item_id: int, result: dict[str, Any]) -> None:
+        now = time.monotonic()
+        with self._lock:
+            self._active.discard(item_id)
+            self._completed[item_id] = (now, result)
+            self._prune_locked(now)
+
+    def active_ids(self) -> list[int]:
+        with self._lock:
+            return sorted(self._active)
+
+    def completed_results(self) -> list[dict[str, Any]]:
+        now = time.monotonic()
+        with self._lock:
+            self._prune_locked(now)
+            return [result for _, result in self._completed.values()]
+
+    def _prune_locked(self, now: float) -> None:
+        self._completed = {
+            item_id: (finished_at, result)
+            for item_id, (finished_at, result) in self._completed.items()
+            if now - finished_at <= 300
+        }
+
+
 class UiSessionRegistry:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -1484,6 +1522,7 @@ class UiSessionRegistry:
 
 
 UI_SESSIONS = UiSessionRegistry()
+ITEM_CHECKS = ItemCheckRegistry()
 SERVER: ThreadingHTTPServer | None = None
 METADATA_BACKFILL_STARTED = False
 METADATA_BACKFILL_LOCK = threading.Lock()
@@ -1516,6 +1555,29 @@ def start_metadata_backfill() -> None:
             print(f"Poster backfill failed: {exc}")
 
     threading.Thread(target=worker, daemon=True).start()
+
+
+def start_background_item_check(item_id: int) -> bool:
+    if not ITEM_CHECKS.start(item_id):
+        return False
+
+    def worker() -> None:
+        try:
+            result = CHECKER.check_new_item_with_retries(item_id, notify=True)
+        except Exception as exc:
+            item = DB.get_item(item_id)
+            result = {
+                "item": item,
+                "error": str(exc),
+                "new": 0,
+                "matched": 0,
+                "pending_new": DB.count_new(item_id) if item else 0,
+                "search_url": RuTrackerClient.search_url(item["query"]) if item else "",
+            }
+        ITEM_CHECKS.finish(item_id, result)
+
+    threading.Thread(target=worker, daemon=True).start()
+    return True
 
 
 def parse_iso_datetime(value: str | None) -> dt.datetime | None:
@@ -1662,6 +1724,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_json(
                     {
                         "items": items,
+                        "checking_item_ids": ITEM_CHECKS.active_ids(),
+                        "check_results": ITEM_CHECKS.completed_results(),
                         "config": {
                             **public_settings,
                             "telegram_enabled": NOTIFIER.enabled,
@@ -1735,10 +1799,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if not DB.has_rutracker_credentials():
                     raise ValueError("Введите логин и пароль RuTracker перед добавлением фильма")
                 item = DB.create_item(self.read_json())
-                item["initial_check"] = CHECKER.check_new_item_with_retries(
-                    int(item["id"]),
-                    notify=True,
-                )
+                item["initial_check_started"] = start_background_item_check(int(item["id"]))
                 self.send_json(item, 201)
                 return
 
