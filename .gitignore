@@ -4,5 +4,6 @@ __pycache__/
 .pytest_cache/
 *.pyc
 *.pdb
+Microsoft.Web.WebView2*.xml
 launcher/bin/
 launcher/obj/

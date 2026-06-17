@@ -398,6 +398,7 @@ class GitUpdateServiceTests(unittest.TestCase):
         self.assertIn("*background_loop.py*", script)
         self.assertIn("*start-tray.ps1*", script)
         self.assertIn("Stop-Process -Id $Process.ProcessId -Force", script)
+        self.assertIn("Start-Process -FilePath $Exe -ArgumentList '--server-only'", script)
 
 
 class DatabaseTests(unittest.TestCase):

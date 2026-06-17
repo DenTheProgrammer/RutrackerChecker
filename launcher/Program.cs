@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Net;
 using System.Runtime.InteropServices;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.WinForms;
 using System.Windows.Forms;
 
 internal static class Program
@@ -13,8 +15,9 @@ internal static class Program
     private const string ShortcutPromptFileName = "desktop-shortcut-prompted.flag";
 
     [STAThread]
-    private static async Task Main()
+    private static async Task Main(string[] args)
     {
+        bool serverOnly = args.Any(arg => arg.Equals("--server-only", StringComparison.OrdinalIgnoreCase));
         string appDir = AppContext.BaseDirectory;
         string appPath = Path.Combine(appDir, "app.py");
         string dataDir = Path.Combine(appDir, "data");
@@ -40,7 +43,11 @@ internal static class Program
         if (state.IsChecker)
         {
             StartTrayIfBackgroundEnabled(appDir, state.BackgroundEnabled);
-            OpenBrowser();
+            if (serverOnly)
+            {
+                return;
+            }
+            OpenAppWindow(dataDir, launcherLog);
             return;
         }
 
@@ -122,16 +129,174 @@ internal static class Program
 
         state = await GetServerState();
         StartTrayIfBackgroundEnabled(appDir, state.BackgroundEnabled);
-        OpenBrowser();
+        if (serverOnly)
+        {
+            return;
+        }
+        OpenAppWindow(dataDir, launcherLog);
     }
 
-    private static void OpenBrowser()
+    private static void OpenAppWindow(string dataDir, string launcherLog)
+    {
+        Exception? windowError = null;
+        Thread uiThread = new(() =>
+        {
+            try
+            {
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                using BrowserForm form = new(Url, dataDir, launcherLog);
+                Application.Run(form);
+            }
+            catch (Exception ex)
+            {
+                windowError = ex;
+            }
+        });
+        uiThread.SetApartmentState(ApartmentState.STA);
+        uiThread.Start();
+        uiThread.Join();
+
+        if (windowError is null)
+        {
+            return;
+        }
+
+        AppendLauncherLog(launcherLog, "app window failed", windowError);
+        MessageBox.Show(
+            "Could not open the app window. The WebView2 Runtime may be missing or unavailable.\n\nOpening RuTracker Checker in your browser instead.",
+            "RuTracker Checker",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Warning
+        );
+        OpenExternalUrl(Url);
+    }
+
+    private static void OpenExternalUrl(string url)
     {
         Process.Start(new ProcessStartInfo
         {
-            FileName = Url,
+            FileName = url,
             UseShellExecute = true
         });
+    }
+
+    private static void AppendLauncherLog(string launcherLog, string message, Exception ex)
+    {
+        try
+        {
+            File.AppendAllText(
+                launcherLog,
+                $"{DateTime.Now:O} {message}: {ex}{Environment.NewLine}"
+            );
+        }
+        catch
+        {
+        }
+    }
+
+    private sealed class BrowserForm : Form
+    {
+        private readonly string url;
+        private readonly string dataDir;
+        private readonly string launcherLog;
+        private readonly WebView2 webView;
+        private bool didInitialize;
+
+        public BrowserForm(string url, string dataDir, string launcherLog)
+        {
+            this.url = url;
+            this.dataDir = dataDir;
+            this.launcherLog = launcherLog;
+
+            Text = "RuTracker Checker";
+            StartPosition = FormStartPosition.CenterScreen;
+            Size = new Size(1180, 800);
+            MinimumSize = new Size(920, 640);
+
+            Icon? appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+            if (appIcon is not null)
+            {
+                Icon = appIcon;
+            }
+
+            webView = new WebView2
+            {
+                Dock = DockStyle.Fill,
+                AllowExternalDrop = false
+            };
+            Controls.Add(webView);
+        }
+
+        protected override async void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            if (didInitialize)
+            {
+                return;
+            }
+
+            didInitialize = true;
+            try
+            {
+                await InitializeWebView();
+            }
+            catch (Exception ex)
+            {
+                AppendLauncherLog(launcherLog, "webview initialization failed", ex);
+                MessageBox.Show(
+                    "Could not open the app window. The WebView2 Runtime may be missing or unavailable.\n\nOpening RuTracker Checker in your browser instead.",
+                    "RuTracker Checker",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning
+                );
+                OpenExternalUrl(url);
+                BeginInvoke(Close);
+            }
+        }
+
+        private async Task InitializeWebView()
+        {
+            string userDataFolder = Path.Combine(dataDir, "webview2");
+            Directory.CreateDirectory(userDataFolder);
+            CoreWebView2Environment environment = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
+            await webView.EnsureCoreWebView2Async(environment);
+
+            CoreWebView2 core = webView.CoreWebView2;
+            core.NewWindowRequested += (_, args) =>
+            {
+                args.Handled = true;
+                if (IsAppUrl(args.Uri))
+                {
+                    core.Navigate(args.Uri);
+                    return;
+                }
+                OpenExternalUrl(args.Uri);
+            };
+            core.NavigationStarting += (_, args) =>
+            {
+                if (IsAppUrl(args.Uri) || args.Uri.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                args.Cancel = true;
+                OpenExternalUrl(args.Uri);
+            };
+            core.Navigate(url);
+        }
+
+        private static bool IsAppUrl(string value)
+        {
+            if (!Uri.TryCreate(value, UriKind.Absolute, out Uri? uri))
+            {
+                return false;
+            }
+
+            bool isLocalHost = uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase)
+                || uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase);
+            return uri.Scheme == Uri.UriSchemeHttp && isLocalHost && uri.Port == 9876;
+        }
     }
 
     private static void PromptForDesktopShortcutIfNeeded(string appDir, string dataDir, string launcherLog)

@@ -1971,7 +1971,7 @@ for ($i = 0; $i -lt 40; $i++) {{
 }}
 $Exe = Join-Path $Root 'RutrackerChecker.exe'
 if (Test-Path $Exe) {{
-    Start-Process -FilePath $Exe -WorkingDirectory $Root
+    Start-Process -FilePath $Exe -ArgumentList '--server-only' -WorkingDirectory $Root
     exit 0
 }}
 $App = Join-Path $Root 'app.py'
