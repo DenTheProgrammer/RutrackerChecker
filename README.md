@@ -18,6 +18,20 @@ If the launcher is not present, start the app from PowerShell:
 
 Open http://127.0.0.1:9876.
 
+## Sharing with another user
+
+Recommended option: share the GitHub repository link and have the other user clone it:
+
+```powershell
+git clone https://github.com/DenTheProgrammer/RutrackerChecker.git
+cd RutrackerChecker
+.\run.ps1
+```
+
+This keeps the folder as a Git working copy, so the built-in update button can check for new commits and install them.
+
+You can also share the folder or a ZIP archive as a portable copy. The app will still run, but built-in updates only work if the received folder includes the hidden `.git` directory and Git is installed. A ZIP downloaded from GitHub normally does not include `.git`, so it should be treated as a manual-update copy.
+
 ## Optional .env Setup
 
 `.env` is still supported as a fallback, but it is no longer required for normal use.
