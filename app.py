@@ -1497,6 +1497,9 @@ class CheckerService:
             "total_pending_new": sum(
                 int(summary.get("pending_new", 0)) for summary in summaries
             ),
+            "total_pending_new_item_count": sum(
+                1 for summary in summaries if int(summary.get("pending_new", 0)) > 0
+            ),
             "results": summaries,
         }
 
@@ -1690,6 +1693,9 @@ def build_check_all_summary(summaries: list[dict[str, Any]]) -> dict[str, Any]:
         "total_new": sum(int(summary.get("new", 0)) for summary in summaries),
         "total_pending_new": sum(
             int(summary.get("pending_new", 0)) for summary in summaries
+        ),
+        "total_pending_new_item_count": sum(
+            1 for summary in summaries if int(summary.get("pending_new", 0)) > 0
         ),
         "results": summaries,
     }

@@ -604,7 +604,9 @@ function rememberCheckAllSummary(summary) {
 }
 
 function formatCheckAllSummary(summary) {
-  return `Готово: ${summary.items_checked || 0} проверено, ${summary.total_new || 0} новых, ${summary.total_pending_new || 0} ждут.`;
+  const pendingItems = summary.total_pending_new_item_count ?? (summary.results || [])
+    .filter((result) => Number(result.pending_new || 0) > 0).length;
+  return `Готово: проверено ${summary.items_checked || 0}; за проверку ${summary.total_new || 0} NEW; с NEW ${pendingItems} ${pluralRu(pendingItems, "фильм", "фильма", "фильмов")}.`;
 }
 
 function renderCheckAllButton() {

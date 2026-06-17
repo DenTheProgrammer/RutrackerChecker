@@ -44,6 +44,7 @@ def summarize_result(
         "items_checked": result.get("items_checked", 0),
         "total_new": result.get("total_new", 0),
         "total_pending_new": result.get("total_pending_new", 0),
+        "total_pending_new_item_count": result.get("total_pending_new_item_count", 0),
         "results": rows,
     }
 

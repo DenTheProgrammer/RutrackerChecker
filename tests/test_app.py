@@ -699,8 +699,21 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(summary["items_checked"], 1)
             self.assertEqual(summary["results"][0]["attempts"], 2)
             self.assertEqual(summary["total_new"], 1)
+            self.assertEqual(summary["total_pending_new_item_count"], 1)
             self.assertEqual(db.count_new(item["id"]), 1)
             db.close()
+
+    def test_check_all_summary_counts_pending_movies_separately_from_releases(self):
+        summary = app.build_check_all_summary(
+            [
+                {"pending_new": 2, "new": 0},
+                {"pending_new": 1, "new": 0},
+                {"pending_new": 0, "new": 0},
+            ]
+        )
+
+        self.assertEqual(summary["total_pending_new"], 3)
+        self.assertEqual(summary["total_pending_new_item_count"], 2)
 
     def test_background_check_all_marks_all_items_active_until_each_finishes(self):
         with tempfile.TemporaryDirectory() as tmp:
