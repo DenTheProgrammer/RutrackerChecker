@@ -1,3 +1,4 @@
+import base64
 import json
 import subprocess
 import tempfile
@@ -371,6 +372,30 @@ class GitUpdateServiceTests(unittest.TestCase):
                     service.apply_update()
 
         self.assertNotIn(("pull", "--ff-only"), calls)
+
+    def test_restart_helper_stops_old_tray_and_background_processes(self):
+        popen_calls = []
+
+        def fake_popen(command, **kwargs):
+            popen_calls.append(command)
+
+            class FakeProcess:
+                pass
+
+            return FakeProcess()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            service = self.make_service(tmp)
+            with patch("app.subprocess.Popen", side_effect=fake_popen):
+                self.assertTrue(service._schedule_restart())
+
+        encoded = popen_calls[0][popen_calls[0].index("-EncodedCommand") + 1]
+        script = base64.b64decode(encoded).decode("utf-16le")
+
+        self.assertIn("Stop-AppHelpers", script)
+        self.assertIn("*background_loop.py*", script)
+        self.assertIn("*start-tray.ps1*", script)
+        self.assertIn("Stop-Process -Id $Process.ProcessId -Force", script)
 
 
 class DatabaseTests(unittest.TestCase):

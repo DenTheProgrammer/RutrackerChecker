@@ -1928,6 +1928,27 @@ $Root = {self._ps_single(root)}
 $Python = {self._ps_single(python)}
 $HostName = {self._ps_single(APP_HOST)}
 $Port = {APP_PORT}
+function Stop-AppHelpers {{
+    $Patterns = @('*background_loop.py*', '*start-tray.ps1*')
+    $Processes = @(Get-CimInstance Win32_Process | Where-Object {{
+        if (-not $_.CommandLine -or $_.ProcessId -eq $PID) {{
+            return $false
+        }}
+        if ($_.CommandLine -notlike "*$Root*") {{
+            return $false
+        }}
+        foreach ($Pattern in $Patterns) {{
+            if ($_.CommandLine -like $Pattern) {{
+                return $true
+            }}
+        }}
+        return $false
+    }})
+    foreach ($Process in $Processes) {{
+        Stop-Process -Id $Process.ProcessId -Force
+    }}
+}}
+Stop-AppHelpers
 Start-Sleep -Milliseconds 800
 for ($i = 0; $i -lt 40; $i++) {{
     $Client = New-Object Net.Sockets.TcpClient
