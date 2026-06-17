@@ -560,6 +560,64 @@ button:disabled {
   text-align: left;
 }
 
+.movie-card.is-card-checking {
+  border-color: color-mix(in srgb, var(--primary) 64%, var(--border));
+  animation: card-check-pulse 1.65s ease-in-out infinite;
+}
+
+.movie-card.is-card-queued {
+  border-color: color-mix(in srgb, #38bdf8 46%, var(--border));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, #38bdf8 24%, transparent),
+    0 18px 42px rgba(14, 165, 233, 0.13);
+}
+
+.movie-card.is-card-checking .poster::before,
+.movie-card.is-card-queued .poster::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.movie-card.is-card-checking .poster::before {
+  background:
+    linear-gradient(120deg, transparent 18%, rgba(255, 255, 255, 0.2) 42%, transparent 64%),
+    color-mix(in srgb, var(--primary) 18%, transparent);
+  background-size: 220% 100%, auto;
+  animation: poster-check-shimmer 1.9s ease-in-out infinite;
+}
+
+.movie-card.is-card-queued .poster::before {
+  background: color-mix(in srgb, #38bdf8 14%, transparent);
+}
+
+@keyframes card-check-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--primary) 24%, transparent),
+      0 18px 42px rgba(34, 197, 94, 0.14);
+  }
+
+  50% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--primary) 54%, transparent),
+      0 22px 58px rgba(34, 197, 94, 0.3);
+  }
+}
+
+@keyframes poster-check-shimmer {
+  0% {
+    background-position: 150% 0, 0 0;
+  }
+
+  100% {
+    background-position: -80% 0, 0 0;
+  }
+}
+
 .movie-card:hover,
 .add-card:hover {
   transform: translateY(-4px);
@@ -668,6 +726,23 @@ button:disabled {
   color: var(--muted);
   background: var(--panel-soft);
   font-size: 12px;
+}
+
+.card-meta .checking-chip {
+  border-color: color-mix(in srgb, var(--primary) 46%, var(--border));
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.card-meta .queued-chip {
+  border-color: color-mix(in srgb, #38bdf8 42%, var(--border));
+  color: #38bdf8;
+  background: color-mix(in srgb, #38bdf8 14%, transparent);
+}
+
+.card-meta .error-chip {
+  color: var(--danger);
+  background: var(--danger-soft);
 }
 
 .card-actions {

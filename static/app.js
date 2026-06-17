@@ -30,6 +30,7 @@ const lastCheckTime = document.querySelector("#lastCheckTime");
 let state = { items: [], config: {}, runtime: {} };
 let lastChecks = new Map();
 let serverCheckIds = new Set();
+let serverQueuedIds = new Set();
 let localCheckIds = new Set();
 let checkAllRunning = false;
 let lastCheckAllSummary = null;
@@ -116,6 +117,14 @@ function isItemChecking(itemId) {
   return serverCheckIds.has(id) || localCheckIds.has(id);
 }
 
+function isItemQueued(itemId) {
+  return serverQueuedIds.has(Number(itemId));
+}
+
+function hasPendingChecks() {
+  return serverCheckIds.size > 0 || serverQueuedIds.size > 0;
+}
+
 function syncCheckPayload(payload = {}) {
   for (const result of payload.check_results || []) {
     rememberCheck(result);
@@ -127,6 +136,7 @@ function syncCheckPayload(payload = {}) {
     checkAllRunning = Boolean(payload.check_all_running);
   }
   serverCheckIds = numberSet(payload.checking_item_ids || []);
+  serverQueuedIds = numberSet(payload.queued_item_ids || []);
 }
 
 function parseDate(value) {
@@ -324,8 +334,9 @@ function renderCards() {
 
 function createMovieCard(item) {
   const card = document.createElement("article");
-  card.className = "movie-card";
   const checking = isItemChecking(item.id);
+  const queued = isItemQueued(item.id);
+  card.className = `movie-card ${checking ? "is-card-checking" : ""} ${queued ? "is-card-queued" : ""}`.trim();
 
   const main = document.createElement("button");
   main.type = "button";
@@ -376,10 +387,17 @@ function createMovieCard(item) {
   const lastCheck = lastChecks.get(item.id);
   if (checking) {
     const chip = document.createElement("span");
+    chip.className = "state-chip checking-chip";
     chip.textContent = "проверяем";
+    meta.append(chip);
+  } else if (queued) {
+    const chip = document.createElement("span");
+    chip.className = "state-chip queued-chip";
+    chip.textContent = "в очереди";
     meta.append(chip);
   } else if (lastCheck) {
     const chip = document.createElement("span");
+    chip.className = `state-chip ${lastCheck.error ? "error-chip" : "checked-chip"}`;
     chip.textContent = lastCheck.error ? "ошибка" : "проверено";
     meta.append(chip);
   }
@@ -397,11 +415,11 @@ function createMovieCard(item) {
     cardButton("trash", "Удалить", () => deleteItem(item), false, "danger-button"),
   );
 
-  if (checking) {
+  if (checking || queued) {
     const refreshButton = actions.querySelector("button:nth-child(2)");
     if (refreshButton) {
       refreshButton.disabled = true;
-      refreshButton.classList.add("is-checking");
+      refreshButton.classList.toggle("is-checking", checking);
     }
   }
 
@@ -606,7 +624,7 @@ function stopCheckPolling() {
 
 async function refreshItemsForChecks() {
   if (checkPollInFlight) return;
-  if (!checkAllRunning && (Date.now() >= checkPollDeadline || serverCheckIds.size <= 0)) {
+  if (!checkAllRunning && (Date.now() >= checkPollDeadline || !hasPendingChecks())) {
     stopCheckPolling();
     return;
   }
@@ -626,7 +644,7 @@ async function refreshItemsForChecks() {
     if (wasCheckAllRunning && !checkAllRunning && lastCheckAllSummary) {
       statusLine.textContent = formatCheckAllSummary(lastCheckAllSummary);
     }
-    if (!checkAllRunning && serverCheckIds.size <= 0) {
+    if (!checkAllRunning && !hasPendingChecks()) {
       stopCheckPolling();
     }
   } catch (error) {
@@ -637,7 +655,7 @@ async function refreshItemsForChecks() {
 }
 
 function startCheckPolling() {
-  if (!checkAllRunning && serverCheckIds.size <= 0) return;
+  if (!checkAllRunning && !hasPendingChecks()) return;
   checkPollDeadline = Date.now() + CHECK_POLL_DURATION_MS;
   if (checkPollTimer) return;
   checkPollTimer = setInterval(refreshItemsForChecks, CHECK_POLL_INTERVAL_MS);

@@ -1460,25 +1460,39 @@ class ItemCheckRegistry:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._active: set[int] = set()
+        self._queued: set[int] = set()
         self._completed: dict[int, tuple[float, dict[str, Any]]] = {}
 
-    def start(self, item_id: int) -> bool:
+    def start(self, item_id: int, queued: bool = False) -> bool:
         with self._lock:
-            if item_id in self._active:
+            if item_id in self._active or item_id in self._queued:
                 return False
-            self._active.add(item_id)
+            if queued:
+                self._queued.add(item_id)
+            else:
+                self._active.add(item_id)
             return True
+
+    def activate(self, item_id: int) -> None:
+        with self._lock:
+            self._queued.discard(item_id)
+            self._active.add(item_id)
 
     def finish(self, item_id: int, result: dict[str, Any]) -> None:
         now = time.monotonic()
         with self._lock:
             self._active.discard(item_id)
+            self._queued.discard(item_id)
             self._completed[item_id] = (now, result)
             self._prune_locked(now)
 
     def active_ids(self) -> list[int]:
         with self._lock:
             return sorted(self._active)
+
+    def queued_ids(self) -> list[int]:
+        with self._lock:
+            return sorted(self._queued)
 
     def completed_results(self) -> list[dict[str, Any]]:
         now = time.monotonic()
@@ -1639,7 +1653,7 @@ def start_background_check_all() -> bool:
         if not item["enabled"]:
             continue
         item_id = int(item["id"])
-        if ITEM_CHECKS.start(item_id):
+        if ITEM_CHECKS.start(item_id, queued=True):
             pending_items.append(item)
 
     def worker() -> None:
@@ -1657,6 +1671,7 @@ def start_background_check_all() -> bool:
                     return
 
                 item_id = int(item["id"])
+                ITEM_CHECKS.activate(item_id)
                 try:
                     result = CHECKER.check_item_with_retries(item_id, notify=True)
                 except Exception as exc:
@@ -1840,6 +1855,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     {
                         "items": items,
                         "checking_item_ids": ITEM_CHECKS.active_ids(),
+                        "queued_item_ids": ITEM_CHECKS.queued_ids(),
                         "check_results": ITEM_CHECKS.completed_results(),
                         "check_all_running": CHECK_ALL.is_active(),
                         "check_all_summary": CHECK_ALL.completed_summary(),
@@ -1927,6 +1943,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                         "check_all_started": started,
                         "check_all_running": CHECK_ALL.is_active(),
                         "checking_item_ids": ITEM_CHECKS.active_ids(),
+                        "queued_item_ids": ITEM_CHECKS.queued_ids(),
                         "check_results": ITEM_CHECKS.completed_results(),
                         "check_all_summary": CHECK_ALL.completed_summary(),
                     }

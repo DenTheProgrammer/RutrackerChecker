@@ -504,6 +504,10 @@ class DatabaseTests(unittest.TestCase):
                 return_value=[7],
             ), patch.object(
                 app.ITEM_CHECKS,
+                "queued_ids",
+                return_value=[8],
+            ), patch.object(
+                app.ITEM_CHECKS,
                 "completed_results",
                 return_value=[],
             ), patch.object(
@@ -535,6 +539,7 @@ class DatabaseTests(unittest.TestCase):
             self.assertTrue(payload["check_all_started"])
             self.assertTrue(payload["check_all_running"])
             self.assertEqual(payload["checking_item_ids"], [7])
+            self.assertEqual(payload["queued_item_ids"], [8])
             start_check_all.assert_called_once()
 
     def test_app_icon_assets_are_served(self):
@@ -666,7 +671,7 @@ class DatabaseTests(unittest.TestCase):
 
             class WaitingChecker:
                 def check_item_with_retries(self, item_id, notify=True):
-                    release_checks.wait(2)
+                    release_checks.wait(30)
                     item = db.get_item(item_id)
                     return {
                         "item": item,
@@ -692,16 +697,33 @@ class DatabaseTests(unittest.TestCase):
                 "CHECK_ALL_MAX_WORKERS",
                 2,
             ):
-                self.assertTrue(app.start_background_check_all())
-                self.assertEqual(item_checks.active_ids(), [item["id"] for item in items])
+                try:
+                    self.assertTrue(app.start_background_check_all())
+                    deadline = time.monotonic() + 3
+                    while (
+                        (len(item_checks.active_ids()) < 2 or len(item_checks.queued_ids()) != 1)
+                        and time.monotonic() < deadline
+                    ):
+                        time.sleep(0.01)
 
-                release_checks.set()
+                    active_ids = item_checks.active_ids()
+                    queued_ids = item_checks.queued_ids()
+                    self.assertEqual(len(active_ids), 2)
+                    self.assertEqual(len(queued_ids), 1)
+                    self.assertEqual(
+                        sorted(active_ids + queued_ids),
+                        sorted(item["id"] for item in items),
+                    )
+                finally:
+                    release_checks.set()
+
                 deadline = time.monotonic() + 3
                 while check_all.is_active() and time.monotonic() < deadline:
                     time.sleep(0.01)
 
                 self.assertFalse(check_all.is_active())
                 self.assertEqual(item_checks.active_ids(), [])
+                self.assertEqual(item_checks.queued_ids(), [])
                 summary = check_all.completed_summary()
                 self.assertIsNotNone(summary)
                 self.assertEqual(summary["items_checked"], 3)
