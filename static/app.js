@@ -248,7 +248,7 @@ function focusCredentialGate() {
 
 function applySettingsToForms() {
   const config = state.config || {};
-  statusLine.textContent = `Автопроверка каждые ${config.check_interval_minutes || 0} мин · Telegram ${config.telegram_enabled ? "подключен" : "не настроен"}`;
+  statusLine.textContent = `Автопроверка каждые ${config.check_interval_minutes || 0} мин`;
   setSettingsStatus(
     hasCredentials() ? "RuTracker сохранен · autosave включен" : "Введите RuTracker логин и пароль"
   );
@@ -258,11 +258,6 @@ function applySettingsToForms() {
   settingsForm.rutracker_password.placeholder = config.has_rutracker_password
     ? SECRET_PLACEHOLDER
     : "Обязательно";
-  settingsForm.telegram_bot_token.value = "";
-  settingsForm.telegram_bot_token.placeholder = config.has_telegram_bot_token
-    ? SECRET_PLACEHOLDER
-    : "Опционально";
-  settingsForm.telegram_chat_id.value = config.telegram_chat_id || "";
   settingsForm.default_min_seeders.value = config.default_min_seeders ?? 5;
   settingsForm.default_min_size_gb.value = config.default_min_size_gb ?? 5;
   settingsForm.default_require_1080p.checked = Boolean(config.default_require_1080p);
@@ -850,7 +845,6 @@ async function applyUpdate() {
 function collectSettingsPayload() {
   const data = {
     rutracker_username: settingsForm.rutracker_username.value.trim(),
-    telegram_chat_id: settingsForm.telegram_chat_id.value.trim(),
     default_min_seeders: Number(settingsForm.default_min_seeders.value || 0),
     default_min_size_gb: Number(settingsForm.default_min_size_gb.value || 0),
     default_require_1080p: settingsForm.default_require_1080p.checked,
@@ -861,9 +855,6 @@ function collectSettingsPayload() {
   };
   if (settingsForm.rutracker_password.value.trim()) {
     data.rutracker_password = settingsForm.rutracker_password.value;
-  }
-  if (settingsForm.telegram_bot_token.value.trim()) {
-    data.telegram_bot_token = settingsForm.telegram_bot_token.value;
   }
   return data;
 }

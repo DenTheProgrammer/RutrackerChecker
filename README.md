@@ -2,13 +2,13 @@
 
 Local web app for tracking RuTracker search queries and spotting new 1080p-or-better releases with enough seeders.
 
-The app stores state in SQLite, shows `N new` counters per query, and can send Telegram notifications when newly matching torrents appear. It does not download torrents or magnet links.
+The app stores state in SQLite, shows `N new` counters per query, and can show Windows notifications when newly matching torrents appear. It does not download torrents or magnet links.
 
 ## Quick Start
 
 Double-click `RutrackerChecker.exe` if it is present in this folder. It starts the local server and opens the UI in a native app window. The same UI is still available at http://127.0.0.1:9876/ for manual debugging. When you close all UI windows or browser tabs, the local server stops automatically after the idle grace period.
 
-On first launch, fill in RuTracker username/password in the Settings panel and click `Save settings`. The credentials are saved locally in `data/app.db`. Leave password/token fields empty later to keep saved values.
+On first launch, fill in RuTracker username/password in the Settings panel and click `Save settings`. The credentials are saved locally in `data/app.db`. Leave the password field empty later to keep the saved value.
 
 If the launcher is not present, start the app from PowerShell:
 
@@ -23,11 +23,9 @@ Open http://127.0.0.1:9876.
 `.env` is still supported as a fallback, but it is no longer required for normal use.
 
 1. Copy `.env.example` to `.env`.
-2. Optionally fill in:
+2. Fill in any credentials you want to preseed:
    - `RUTRACKER_USERNAME`
    - `RUTRACKER_PASSWORD`
-   - optional `TELEGRAM_BOT_TOKEN`
-   - optional `TELEGRAM_CHAT_ID`
 
 ## Usage
 
