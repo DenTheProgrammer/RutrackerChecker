@@ -18,6 +18,7 @@ from app import (
     RequestHandler,
     RuTrackerClient,
     SearchResult,
+    TransientRuTrackerError,
     fetch_movie_metadata,
     filter_results,
     parse_rutracker_results,
@@ -580,7 +581,7 @@ class DatabaseTests(unittest.TestCase):
                 def search(self, query):
                     self.calls += 1
                     if self.calls < 3:
-                        raise urllib.error.URLError("RuTracker is busy")
+                        raise TransientRuTrackerError("RuTracker is busy")
                     return [
                         SearchResult(
                             topic_id="111",
@@ -607,6 +608,55 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(summary["attempts"], 3)
             self.assertEqual(summary["new"], 1)
             self.assertEqual(db.count_new(item["id"]), 1)
+            db.close()
+
+    def test_rutracker_request_retries_read_timeout_quickly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            client = RuTrackerClient(db)
+
+            class FakeHeaders:
+                def get_content_charset(self):
+                    return "utf-8"
+
+            class FakeResponse:
+                headers = FakeHeaders()
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, traceback):
+                    return False
+
+                def read(self):
+                    return b"ok"
+
+            class FakeOpener:
+                def __init__(self):
+                    self.calls = 0
+                    self.timeouts = []
+
+                def open(self, request, timeout):
+                    self.calls += 1
+                    self.timeouts.append(timeout)
+                    if self.calls == 1:
+                        raise TimeoutError("read timed out")
+                    return FakeResponse()
+
+            opener = FakeOpener()
+            client.opener = opener
+
+            with patch.object(app.time, "sleep") as sleep, patch.object(
+                app,
+                "RUTRACKER_REQUEST_TIMEOUT_SECONDS",
+                12,
+            ):
+                html = client.request("https://rutracker.org/forum/tracker.php", attempts=2)
+
+            self.assertEqual(html, "ok")
+            self.assertEqual(opener.calls, 2)
+            self.assertEqual(opener.timeouts, [12, 12])
+            sleep.assert_called_once_with(1)
             db.close()
 
     def test_pending_results_that_fail_current_filter_are_cleared(self):

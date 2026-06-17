@@ -104,7 +104,10 @@ AUTO_SHUTDOWN_WHEN_IDLE = config("AUTO_SHUTDOWN_WHEN_IDLE", "1") != "0"
 AUTO_SHUTDOWN_GRACE_SECONDS = config_int("AUTO_SHUTDOWN_GRACE_SECONDS", 45)
 APP_HOST = config("APP_HOST", "127.0.0.1")
 APP_PORT = config_int("APP_PORT", 9876)
-INITIAL_ITEM_CHECK_ATTEMPTS = max(1, config_int("INITIAL_ITEM_CHECK_ATTEMPTS", 3))
+RUTRACKER_REQUEST_ATTEMPTS = max(1, config_int("RUTRACKER_REQUEST_ATTEMPTS", 3))
+RUTRACKER_REQUEST_TIMEOUT_SECONDS = max(3, config_int("RUTRACKER_REQUEST_TIMEOUT_SECONDS", 12))
+RUTRACKER_RETRY_BASE_SECONDS = max(0, config_int("RUTRACKER_RETRY_BASE_SECONDS", 1))
+INITIAL_ITEM_CHECK_ATTEMPTS = max(1, config_int("INITIAL_ITEM_CHECK_ATTEMPTS", 2))
 INITIAL_ITEM_CHECK_RETRY_SECONDS = max(0, config_int("INITIAL_ITEM_CHECK_RETRY_SECONDS", 3))
 RETRYABLE_HTTP_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
@@ -148,6 +151,10 @@ class SearchResult:
     resolution: str
     size_bytes: int = 0
     size_label: str = ""
+
+
+class TransientRuTrackerError(RuntimeError):
+    pass
 
 
 def strip_tags(value: str) -> str:
@@ -1164,24 +1171,33 @@ class RuTrackerClient:
         self._identity = identity
         self._logged_in = False
 
-    def request(self, url: str, data: dict[str, str] | None = None) -> str:
+    def request(
+        self,
+        url: str,
+        data: dict[str, str] | None = None,
+        attempts: int = RUTRACKER_REQUEST_ATTEMPTS,
+    ) -> str:
         encoded_data = urllib.parse.urlencode(data).encode("cp1251") if data else None
-        request = urllib.request.Request(
-            url,
-            data=encoded_data,
-            headers={
-                "User-Agent": "RutrackerChecker/1.0 (+local personal monitor)",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-                "Cache-Control": "no-cache",
-                "Pragma": "no-cache",
-            },
-            method="POST" if data else "GET",
-        )
         last_error: Exception | None = None
-        for attempt in range(5):
+        for attempt in range(max(1, attempts)):
+            request = urllib.request.Request(
+                url,
+                data=encoded_data,
+                headers={
+                    "User-Agent": "RutrackerChecker/1.0 (+local personal monitor)",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+                    "Cache-Control": "no-cache",
+                    "Connection": "close",
+                    "Pragma": "no-cache",
+                },
+                method="POST" if data else "GET",
+            )
             try:
-                with self.opener.open(request, timeout=60) as response:
+                with self.opener.open(
+                    request,
+                    timeout=RUTRACKER_REQUEST_TIMEOUT_SECONDS,
+                ) as response:
                     raw = response.read()
                     charset = response.headers.get_content_charset() or "cp1251"
                     return raw.decode(charset, errors="replace")
@@ -1189,12 +1205,49 @@ class RuTrackerClient:
                 last_error = exc
                 if exc.code not in RETRYABLE_HTTP_STATUS_CODES:
                     raise
-                time.sleep(1 + attempt * 2)
+                self.sleep_before_retry(attempt, attempts, exc)
             except (TimeoutError, socket.timeout, ConnectionResetError, urllib.error.URLError) as exc:
                 last_error = exc
-                time.sleep(1 + attempt * 2)
+                self.sleep_before_retry(attempt, attempts)
         assert last_error is not None
         raise last_error
+
+    @staticmethod
+    def sleep_before_retry(
+        attempt: int,
+        attempts: int,
+        exc: urllib.error.HTTPError | None = None,
+    ) -> None:
+        if attempt + 1 >= attempts:
+            return
+        retry_after = 0
+        if exc is not None:
+            try:
+                retry_after = int(exc.headers.get("Retry-After", "0"))
+            except ValueError:
+                retry_after = 0
+        delay = retry_after or RUTRACKER_RETRY_BASE_SECONDS * (attempt + 1)
+        if delay > 0:
+            time.sleep(min(delay, 10))
+
+    @staticmethod
+    def is_login_page(html: str) -> bool:
+        return "login_username" in html and "login_password" in html
+
+    @staticmethod
+    def raise_for_transient_page(html: str) -> None:
+        lowered = html.lower()
+        transient_markers = (
+            "cf-chl-",
+            "just a moment",
+            "checking your browser",
+            "temporarily unavailable",
+            "gateway time-out",
+            "bad gateway",
+            "connection timed out",
+        )
+        if any(marker in lowered for marker in transient_markers):
+            raise TransientRuTrackerError("RuTracker returned a temporary error page")
 
     def login(self) -> None:
         username, password = self.credentials()
@@ -1212,7 +1265,8 @@ class RuTrackerClient:
                     "login": "Вход",
                 },
             )
-            if "login.php" in html and "login_username" in html:
+            self.raise_for_transient_page(html)
+            if self.is_login_page(html):
                 raise RuntimeError("RuTracker login failed; check .env credentials")
             self._logged_in = True
 
@@ -1231,10 +1285,14 @@ class RuTrackerClient:
                 break
             seen_urls.add(url)
             html = self.request(url)
-            if "login_username" in html and "login_password" in html:
+            self.raise_for_transient_page(html)
+            if self.is_login_page(html):
                 self._logged_in = False
                 self.login()
                 html = self.request(url)
+                self.raise_for_transient_page(html)
+                if self.is_login_page(html):
+                    raise TransientRuTrackerError("RuTracker returned login page during search")
 
             for result in parse_rutracker_results(html):
                 all_results[result.topic_id] = result
@@ -1326,7 +1384,7 @@ class CheckerService:
             "search_url": RuTrackerClient.search_url(item["query"]),
         }
 
-    def check_new_item_with_retries(
+    def check_item_with_retries(
         self,
         item_id: int,
         notify: bool = True,
@@ -1357,14 +1415,19 @@ class CheckerService:
             "search_url": RuTrackerClient.search_url(item["query"]) if item else "",
         }
 
+    def check_new_item_with_retries(
+        self,
+        item_id: int,
+        notify: bool = True,
+        attempts: int = INITIAL_ITEM_CHECK_ATTEMPTS,
+    ) -> dict[str, Any]:
+        return self.check_item_with_retries(item_id, notify=notify, attempts=attempts)
+
     @staticmethod
     def is_retryable_check_error(exc: Exception) -> bool:
         if isinstance(exc, urllib.error.HTTPError):
             return exc.code in RETRYABLE_HTTP_STATUS_CODES
-        return isinstance(
-            exc,
-            (TimeoutError, socket.timeout, ConnectionResetError, urllib.error.URLError),
-        )
+        return isinstance(exc, TransientRuTrackerError)
 
     def check_all(self, notify: bool = True) -> dict[str, Any]:
         summaries = []
@@ -1698,7 +1761,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 
             check_match = re.match(r"^/api/items/(\d+)/check$", self.path)
             if check_match:
-                self.send_json(CHECKER.check_item(int(check_match.group(1)), notify=True))
+                self.send_json(CHECKER.check_item_with_retries(int(check_match.group(1)), notify=True))
                 return
 
             metadata_match = re.match(r"^/api/items/(\d+)/refresh-metadata$", self.path)
