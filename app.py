@@ -165,7 +165,7 @@ def install_startup_autoload() -> dict[str, Any]:
             cwd=BASE_DIR,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=8,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -177,6 +177,7 @@ def install_startup_autoload() -> dict[str, Any]:
             details = f"PowerShell завершился с кодом {result.returncode}."
         raise RuntimeError(details)
 
+    start_tray_if_background_enabled()
     return read_runtime_status()
 
 

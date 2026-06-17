@@ -15,8 +15,6 @@ $Shortcut.WorkingDirectory = $Root
 $Shortcut.Description = "Starts RuTracker Checker background loop and tray icon"
 $Shortcut.Save()
 
-Start-Process -FilePath "wscript.exe" -ArgumentList "`"$Target`"" -WindowStyle Hidden
-
 Write-Host "Installed Startup shortcut:"
 Write-Host $ShortcutPath
-Write-Host "Background checker and tray icon started."
+Write-Host "Background checker will start at Windows logon."

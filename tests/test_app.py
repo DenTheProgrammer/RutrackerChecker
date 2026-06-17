@@ -401,6 +401,14 @@ class GitUpdateServiceTests(unittest.TestCase):
         self.assertIn("Stop-Process -Id $Process.ProcessId -Force", script)
         self.assertIn("Start-Process -FilePath $Exe -ArgumentList '--server-only'", script)
 
+    def test_install_startup_script_only_installs_shortcut(self):
+        script = (Path(__file__).resolve().parents[1] / "install_startup.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("$Shortcut.Save()", script)
+        self.assertNotIn("Start-Process -FilePath \"wscript.exe\"", script)
+
 
 class DatabaseTests(unittest.TestCase):
     def test_existing_database_gets_metadata_columns(self):
@@ -1671,7 +1679,9 @@ class DatabaseTests(unittest.TestCase):
             ), patch(
                 "app.subprocess.run",
                 side_effect=fake_run,
-            ) as run_installer:
+            ) as run_installer, patch(
+                "app.start_tray_if_background_enabled",
+            ) as start_tray:
                 server = ThreadingHTTPServer(("127.0.0.1", 0), RequestHandler)
                 thread = threading.Thread(target=server.serve_forever, daemon=True)
                 thread.start()
@@ -1693,6 +1703,8 @@ class DatabaseTests(unittest.TestCase):
             self.assertTrue(payload["runtime"]["startup_installed"])
             self.assertTrue(shortcut_path.exists())
             run_installer.assert_called_once()
+            self.assertEqual(run_installer.call_args.kwargs["timeout"], 8)
+            start_tray.assert_called_once()
 
     def test_startup_install_api_returns_json_error_when_unsupported(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -360,16 +360,25 @@ async function installStartup() {
   startupStatus.classList.remove("error");
   startupStatus.textContent = "Добавляем в автозагрузку...";
   setBusy(startupInstallButton, true);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 12000);
   try {
-    const payload = await api("/api/startup/install", { method: "POST" });
+    const payload = await api("/api/startup/install", {
+      method: "POST",
+      signal: controller.signal,
+    });
     state.runtime = payload.runtime || await api("/api/runtime");
     renderRuntime();
   } catch (error) {
-    startupStatus.textContent = `Не удалось включить автозагрузку: ${error.message}`;
+    const message = error.name === "AbortError"
+      ? "операция заняла слишком много времени"
+      : error.message;
+    startupStatus.textContent = `Не удалось включить автозагрузку: ${message}`;
     startupStatus.classList.add("error");
     if (startupActions) startupActions.hidden = false;
     startupInstallButton.hidden = false;
   } finally {
+    clearTimeout(timeoutId);
     startupInstallInFlight = false;
     setBusy(startupInstallButton, false);
   }
