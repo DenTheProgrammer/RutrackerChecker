@@ -346,7 +346,7 @@ try {
     $ResumeItem = $Menu.Items.Add("Resume background checks")
     $RefreshItem = $Menu.Items.Add("Refresh status")
     $Menu.Items.Add("-") | Out-Null
-    $ExitItem = $Menu.Items.Add("Exit")
+    $ExitItem = $Menu.Items.Add("Exit (stops background checks!)")
     $NotifyIcon.ContextMenuStrip = $Menu
 
     $OpenItem.Add_Click({ Open-Ui })

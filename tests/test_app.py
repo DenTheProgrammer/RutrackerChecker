@@ -947,6 +947,59 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(len(db.list_results(item["id"])), 1)
             db.close()
 
+    def test_list_items_puts_pending_new_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            old_clean = db.create_item({"title": "Old Clean", "query": "old clean"})
+            recent_clean = db.create_item({"title": "Recent Clean", "query": "recent clean"})
+            old_new = db.create_item({"title": "Old New", "query": "old new"})
+            recent_new = db.create_item({"title": "Recent New", "query": "recent new"})
+
+            db.save_results(
+                old_new["id"],
+                [
+                    SearchResult(
+                        topic_id="111",
+                        title="Old New 1080p",
+                        url="https://rutracker.org/forum/viewtopic.php?t=111",
+                        seeders=12,
+                        resolution="1080p",
+                        size_bytes=8 * 1024**3,
+                        size_label="8 GB",
+                    )
+                ],
+            )
+            db.save_results(
+                recent_new["id"],
+                [
+                    SearchResult(
+                        topic_id="222",
+                        title="Recent New 1080p",
+                        url="https://rutracker.org/forum/viewtopic.php?t=222",
+                        seeders=12,
+                        resolution="1080p",
+                        size_bytes=8 * 1024**3,
+                        size_label="8 GB",
+                    )
+                ],
+            )
+            db.conn().executemany(
+                "UPDATE items SET updated_at = ? WHERE id = ?",
+                [
+                    ("2026-01-01 00:00:00", old_clean["id"]),
+                    ("2026-01-04 00:00:00", recent_clean["id"]),
+                    ("2026-01-02 00:00:00", old_new["id"]),
+                    ("2026-01-03 00:00:00", recent_new["id"]),
+                ],
+            )
+            db.conn().commit()
+
+            self.assertEqual(
+                [item["title"] for item in db.list_items()],
+                ["Recent New", "Old New", "Recent Clean", "Old Clean"],
+            )
+            db.close()
+
     def test_initial_item_check_retries_transient_errors(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / "app.db")

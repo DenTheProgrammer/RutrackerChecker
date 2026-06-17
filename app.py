@@ -922,7 +922,10 @@ class Database:
             FROM items i
             LEFT JOIN results r ON r.item_id = i.id
             GROUP BY i.id
-            ORDER BY i.updated_at DESC, i.id DESC
+            ORDER BY
+                CASE WHEN new_count > 0 THEN 0 ELSE 1 END,
+                i.updated_at DESC,
+                i.id DESC
             """
         ).fetchall()
         return [dict(row) for row in rows]
