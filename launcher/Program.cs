@@ -17,6 +17,8 @@ internal static class Program
     [STAThread]
     private static async Task Main(string[] args)
     {
+        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+
         bool serverOnly = args.Any(arg => arg.Equals("--server-only", StringComparison.OrdinalIgnoreCase));
         string appDir = AppContext.BaseDirectory;
         string appPath = Path.Combine(appDir, "app.py");
@@ -213,6 +215,7 @@ internal static class Program
             StartPosition = FormStartPosition.CenterScreen;
             Size = new Size(1180, 800);
             MinimumSize = new Size(920, 640);
+            WindowState = FormWindowState.Maximized;
 
             Icon? appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             if (appIcon is not null)
