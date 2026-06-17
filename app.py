@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
 import sqlite3
 import socket
@@ -109,6 +110,7 @@ RUTRACKER_REQUEST_TIMEOUT_SECONDS = max(3, config_int("RUTRACKER_REQUEST_TIMEOUT
 RUTRACKER_RETRY_BASE_SECONDS = max(0, config_int("RUTRACKER_RETRY_BASE_SECONDS", 1))
 INITIAL_ITEM_CHECK_ATTEMPTS = max(1, config_int("INITIAL_ITEM_CHECK_ATTEMPTS", 2))
 INITIAL_ITEM_CHECK_RETRY_SECONDS = max(0, config_int("INITIAL_ITEM_CHECK_RETRY_SECONDS", 3))
+CHECK_ALL_MAX_WORKERS = max(1, config_int("CHECK_ALL_MAX_WORKERS", 3))
 RETRYABLE_HTTP_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 SETTING_ENV = {
@@ -1492,6 +1494,40 @@ class ItemCheckRegistry:
         }
 
 
+class CheckAllRegistry:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._active = False
+        self._completed: tuple[float, dict[str, Any]] | None = None
+
+    def start(self) -> bool:
+        with self._lock:
+            if self._active:
+                return False
+            self._active = True
+            self._completed = None
+            return True
+
+    def finish(self, summary: dict[str, Any]) -> None:
+        with self._lock:
+            self._active = False
+            self._completed = (time.monotonic(), summary)
+
+    def is_active(self) -> bool:
+        with self._lock:
+            return self._active
+
+    def completed_summary(self) -> dict[str, Any] | None:
+        with self._lock:
+            if not self._completed:
+                return None
+            finished_at, summary = self._completed
+            if time.monotonic() - finished_at > 300:
+                self._completed = None
+                return None
+            return summary
+
+
 class UiSessionRegistry:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -1523,6 +1559,7 @@ class UiSessionRegistry:
 
 UI_SESSIONS = UiSessionRegistry()
 ITEM_CHECKS = ItemCheckRegistry()
+CHECK_ALL = CheckAllRegistry()
 SERVER: ThreadingHTTPServer | None = None
 METADATA_BACKFILL_STARTED = False
 METADATA_BACKFILL_LOCK = threading.Lock()
@@ -1574,7 +1611,85 @@ def start_background_item_check(item_id: int) -> bool:
                 "pending_new": DB.count_new(item_id) if item else 0,
                 "search_url": RuTrackerClient.search_url(item["query"]) if item else "",
             }
-        ITEM_CHECKS.finish(item_id, result)
+        finally:
+            ITEM_CHECKS.finish(item_id, result)
+            DB.close()
+
+    threading.Thread(target=worker, daemon=True).start()
+    return True
+
+
+def build_check_all_summary(summaries: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "items_checked": len(summaries),
+        "total_new": sum(int(summary.get("new", 0)) for summary in summaries),
+        "total_pending_new": sum(
+            int(summary.get("pending_new", 0)) for summary in summaries
+        ),
+        "results": summaries,
+    }
+
+
+def start_background_check_all() -> bool:
+    if not CHECK_ALL.start():
+        return False
+
+    pending_items = []
+    for item in DB.list_items():
+        if not item["enabled"]:
+            continue
+        item_id = int(item["id"])
+        if ITEM_CHECKS.start(item_id):
+            pending_items.append(item)
+
+    def worker() -> None:
+        summaries: list[dict[str, Any]] = []
+        summaries_lock = threading.Lock()
+        work_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+        for item in pending_items:
+            work_queue.put(item)
+
+        def check_next() -> None:
+            while True:
+                try:
+                    item = work_queue.get_nowait()
+                except queue.Empty:
+                    return
+
+                item_id = int(item["id"])
+                try:
+                    result = CHECKER.check_item_with_retries(item_id, notify=True)
+                except Exception as exc:
+                    current_item = DB.get_item(item_id) or item
+                    result = {
+                        "item": current_item,
+                        "error": str(exc),
+                        "new": 0,
+                        "matched": 0,
+                        "pending_new": DB.count_new(item_id) if current_item else 0,
+                        "search_url": RuTrackerClient.search_url(current_item["query"])
+                        if current_item
+                        else "",
+                    }
+                finally:
+                    work_queue.task_done()
+
+                with summaries_lock:
+                    summaries.append(result)
+                ITEM_CHECKS.finish(item_id, result)
+                DB.close()
+
+        try:
+            workers = [
+                threading.Thread(target=check_next, daemon=True)
+                for _ in range(min(CHECK_ALL_MAX_WORKERS, len(pending_items)))
+            ]
+            for thread in workers:
+                thread.start()
+            for thread in workers:
+                thread.join()
+        finally:
+            CHECK_ALL.finish(build_check_all_summary(summaries))
 
     threading.Thread(target=worker, daemon=True).start()
     return True
@@ -1726,6 +1841,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                         "items": items,
                         "checking_item_ids": ITEM_CHECKS.active_ids(),
                         "check_results": ITEM_CHECKS.completed_results(),
+                        "check_all_running": CHECK_ALL.is_active(),
+                        "check_all_summary": CHECK_ALL.completed_summary(),
                         "config": {
                             **public_settings,
                             "telegram_enabled": NOTIFIER.enabled,
@@ -1804,7 +1921,16 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
 
             if self.path == "/api/check-all":
-                self.send_json(CHECKER.check_all(notify=True))
+                started = start_background_check_all()
+                self.send_json(
+                    {
+                        "check_all_started": started,
+                        "check_all_running": CHECK_ALL.is_active(),
+                        "checking_item_ids": ITEM_CHECKS.active_ids(),
+                        "check_results": ITEM_CHECKS.completed_results(),
+                        "check_all_summary": CHECK_ALL.completed_summary(),
+                    }
+                )
                 return
 
             if self.path == "/api/heartbeat":

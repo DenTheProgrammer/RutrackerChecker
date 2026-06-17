@@ -1,6 +1,7 @@
 import json
 import tempfile
 import threading
+import time
 import unittest
 import datetime as dt
 import sqlite3
@@ -487,6 +488,55 @@ class DatabaseTests(unittest.TestCase):
 
             backfill.assert_called_once()
 
+    def test_check_all_api_starts_background_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            with patch.object(app, "DB", db), patch(
+                "app.start_background_check_all",
+                return_value=True,
+            ) as start_check_all, patch.object(
+                app.CHECK_ALL,
+                "is_active",
+                return_value=True,
+            ), patch.object(
+                app.ITEM_CHECKS,
+                "active_ids",
+                return_value=[7],
+            ), patch.object(
+                app.ITEM_CHECKS,
+                "completed_results",
+                return_value=[],
+            ), patch.object(
+                app.CHECK_ALL,
+                "completed_summary",
+                return_value=None,
+            ), patch.object(
+                app.CHECKER,
+                "check_all",
+                side_effect=AssertionError("check_all must stay out of the request thread"),
+            ):
+                server = ThreadingHTTPServer(("127.0.0.1", 0), RequestHandler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_port}/api/check-all",
+                    method="POST",
+                )
+
+                try:
+                    with urllib.request.urlopen(request, timeout=5) as response:
+                        payload = json.loads(response.read().decode("utf-8"))
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    db.close()
+
+            self.assertEqual(response.status, 200)
+            self.assertTrue(payload["check_all_started"])
+            self.assertTrue(payload["check_all_running"])
+            self.assertEqual(payload["checking_item_ids"], [7])
+            start_check_all.assert_called_once()
+
     def test_app_icon_assets_are_served(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / "app.db")
@@ -603,6 +653,58 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(summary["attempts"], 3)
             self.assertEqual(summary["new"], 1)
             self.assertEqual(db.count_new(item["id"]), 1)
+            db.close()
+
+    def test_background_check_all_marks_all_items_active_until_each_finishes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            items = [
+                db.create_item({"title": f"Movie {index}", "query": f"Movie {index}"})
+                for index in range(3)
+            ]
+            release_checks = threading.Event()
+
+            class WaitingChecker:
+                def check_item_with_retries(self, item_id, notify=True):
+                    release_checks.wait(2)
+                    item = db.get_item(item_id)
+                    return {
+                        "item": item,
+                        "raw": 0,
+                        "matched": 0,
+                        "new": 0,
+                        "pending_new": 0,
+                        "search_url": "",
+                    }
+
+            item_checks = app.ItemCheckRegistry()
+            check_all = app.CheckAllRegistry()
+            with patch.object(app, "DB", db), patch.object(
+                app,
+                "CHECKER",
+                WaitingChecker(),
+            ), patch.object(app, "ITEM_CHECKS", item_checks), patch.object(
+                app,
+                "CHECK_ALL",
+                check_all,
+            ), patch.object(
+                app,
+                "CHECK_ALL_MAX_WORKERS",
+                2,
+            ):
+                self.assertTrue(app.start_background_check_all())
+                self.assertEqual(item_checks.active_ids(), [item["id"] for item in items])
+
+                release_checks.set()
+                deadline = time.monotonic() + 3
+                while check_all.is_active() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+
+                self.assertFalse(check_all.is_active())
+                self.assertEqual(item_checks.active_ids(), [])
+                summary = check_all.completed_summary()
+                self.assertIsNotNone(summary)
+                self.assertEqual(summary["items_checked"], 3)
             db.close()
 
     def test_rutracker_request_retries_read_timeout_quickly(self):

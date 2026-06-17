@@ -72,6 +72,7 @@ If you prefer Windows Task Scheduler instead, `install_task.ps1` and `uninstall_
 - `RUTRACKER_RETRY_BASE_SECONDS`: base delay between RuTracker request retries; default is `1`.
 - `INITIAL_ITEM_CHECK_ATTEMPTS`: extra retries for temporary RuTracker pages after adding a new item; default is `2`.
 - `INITIAL_ITEM_CHECK_RETRY_SECONDS`: delay between those new-item retries; default is `3`.
+- `CHECK_ALL_MAX_WORKERS`: simultaneous item checks for the manual "check all" action; default is `3`.
 - `AUTO_SHUTDOWN_WHEN_IDLE`: `1` stops the server after all UI tabs are closed.
 - `AUTO_SHUTDOWN_GRACE_SECONDS`: idle close delay; default is `45`.
 - `APP_HOST` and `APP_PORT`: local server address.

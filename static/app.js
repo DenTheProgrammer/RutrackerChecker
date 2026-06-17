@@ -31,6 +31,8 @@ let state = { items: [], config: {}, runtime: {} };
 let lastChecks = new Map();
 let serverCheckIds = new Set();
 let localCheckIds = new Set();
+let checkAllRunning = false;
+let lastCheckAllSummary = null;
 let checkPollTimer = null;
 let checkPollDeadline = 0;
 let checkPollInFlight = false;
@@ -117,6 +119,12 @@ function isItemChecking(itemId) {
 function syncCheckPayload(payload = {}) {
   for (const result of payload.check_results || []) {
     rememberCheck(result);
+  }
+  if (payload.check_all_summary) {
+    rememberCheckAllSummary(payload.check_all_summary);
+  }
+  if ("check_all_running" in payload) {
+    checkAllRunning = Boolean(payload.check_all_running);
   }
   serverCheckIds = numberSet(payload.checking_item_ids || []);
 }
@@ -419,6 +427,7 @@ function cardButton(iconName, title, onClick, disabled = false, extraClass = "")
 function render() {
   applySettingsToForms();
   renderRuntime();
+  renderCheckAllButton();
   renderCards();
 }
 
@@ -555,6 +564,25 @@ function rememberCheck(result) {
   });
 }
 
+function rememberCheckAllSummary(summary) {
+  if (!summary) return;
+  lastCheckAllSummary = summary;
+  for (const result of summary.results || []) {
+    rememberCheck(result);
+    if (result.error && result.item) {
+      lastChecks.set(result.item.id, { error: true, message: result.error });
+    }
+  }
+}
+
+function formatCheckAllSummary(summary) {
+  return `Готово: ${summary.items_checked || 0} проверено, ${summary.total_new || 0} новых, ${summary.total_pending_new || 0} ждут.`;
+}
+
+function renderCheckAllButton() {
+  setBusy(checkAllButton, checkAllRunning);
+}
+
 async function load() {
   const [itemsPayload, runtimePayload] = await Promise.all([
     api("/api/items"),
@@ -578,12 +606,13 @@ function stopCheckPolling() {
 
 async function refreshItemsForChecks() {
   if (checkPollInFlight) return;
-  if (Date.now() >= checkPollDeadline || serverCheckIds.size <= 0) {
+  if (!checkAllRunning && (Date.now() >= checkPollDeadline || serverCheckIds.size <= 0)) {
     stopCheckPolling();
     return;
   }
 
   checkPollInFlight = true;
+  const wasCheckAllRunning = checkAllRunning;
   try {
     const itemsPayload = await api("/api/items");
     syncCheckPayload(itemsPayload);
@@ -592,8 +621,12 @@ async function refreshItemsForChecks() {
       items: itemsPayload.items || [],
       config: itemsPayload.config || state.config,
     };
+    renderCheckAllButton();
     renderCards();
-    if (serverCheckIds.size <= 0) {
+    if (wasCheckAllRunning && !checkAllRunning && lastCheckAllSummary) {
+      statusLine.textContent = formatCheckAllSummary(lastCheckAllSummary);
+    }
+    if (!checkAllRunning && serverCheckIds.size <= 0) {
       stopCheckPolling();
     }
   } catch (error) {
@@ -604,7 +637,7 @@ async function refreshItemsForChecks() {
 }
 
 function startCheckPolling() {
-  if (serverCheckIds.size <= 0) return;
+  if (!checkAllRunning && serverCheckIds.size <= 0) return;
   checkPollDeadline = Date.now() + CHECK_POLL_DURATION_MS;
   if (checkPollTimer) return;
   checkPollTimer = setInterval(refreshItemsForChecks, CHECK_POLL_INTERVAL_MS);
@@ -772,33 +805,28 @@ settingsForm.addEventListener("change", (event) => {
 });
 
 checkAllButton.addEventListener("click", async () => {
-  const checkAllIds = (state.items || [])
-    .filter((item) => item.enabled)
-    .map((item) => Number(item.id));
-  for (const itemId of checkAllIds) {
-    localCheckIds.add(itemId);
-  }
-  renderCards();
-  setBusy(checkAllButton, true);
+  checkAllRunning = true;
+  renderCheckAllButton();
+  statusLine.textContent = "Запускаем проверку всех карточек...";
   try {
-    const summary = await api("/api/check-all", { method: "POST" });
-    for (const result of summary.results || []) {
-      rememberCheck(result);
-      if (result.error && result.item) {
-        lastChecks.set(result.item.id, { error: true, message: result.error });
-      }
-    }
-    await load();
-    await refreshRuntime();
-    statusLine.textContent = `Готово: ${summary.items_checked} проверено, ${summary.total_new} новых, ${summary.total_pending_new || 0} ждут.`;
-  } catch (error) {
-    statusLine.textContent = `Проверка не удалась: ${error.message}`;
-  } finally {
-    for (const itemId of checkAllIds) {
-      localCheckIds.delete(itemId);
-    }
+    const payload = await api("/api/check-all", { method: "POST" });
+    syncCheckPayload(payload);
+    renderCheckAllButton();
     renderCards();
-    setBusy(checkAllButton, false);
+    startCheckPolling();
+    if (payload.check_all_started) {
+      statusLine.textContent = "Проверка запущена: карточки будут гаснуть по одной после ответа RuTracker.";
+    } else if (checkAllRunning) {
+      statusLine.textContent = "Проверка уже идет.";
+    } else if (lastCheckAllSummary) {
+      statusLine.textContent = formatCheckAllSummary(lastCheckAllSummary);
+    } else {
+      statusLine.textContent = "Проверка не запущена.";
+    }
+  } catch (error) {
+    checkAllRunning = false;
+    renderCheckAllButton();
+    statusLine.textContent = `Проверка не удалась: ${error.message}`;
   }
 });
 
