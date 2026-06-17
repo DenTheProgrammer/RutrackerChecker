@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 internal static class Program
@@ -8,6 +9,8 @@ internal static class Program
     private const string AppHost = "127.0.0.1";
     private const string AppPort = "9876";
     private const string RequiredVersion = "1.5.1";
+    private const string ShortcutName = "RuTracker Checker.lnk";
+    private const string ShortcutPromptFileName = "desktop-shortcut-prompted.flag";
 
     [STAThread]
     private static async Task Main()
@@ -30,6 +33,8 @@ internal static class Program
             );
             return;
         }
+
+        PromptForDesktopShortcutIfNeeded(appDir, dataDir, launcherLog);
 
         ServerState state = await GetServerState();
         if (state.IsChecker)
@@ -127,6 +132,138 @@ internal static class Program
             FileName = Url,
             UseShellExecute = true
         });
+    }
+
+    private static void PromptForDesktopShortcutIfNeeded(string appDir, string dataDir, string launcherLog)
+    {
+        string promptedPath = Path.Combine(dataDir, ShortcutPromptFileName);
+        if (File.Exists(promptedPath))
+        {
+            return;
+        }
+
+        string desktopDir = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        if (string.IsNullOrWhiteSpace(desktopDir))
+        {
+            return;
+        }
+
+        string shortcutPath = Path.Combine(desktopDir, ShortcutName);
+        if (File.Exists(shortcutPath))
+        {
+            MarkShortcutPrompted(promptedPath);
+            return;
+        }
+
+        string? targetPath = Environment.ProcessPath;
+        if (
+            string.IsNullOrWhiteSpace(targetPath) ||
+            !File.Exists(targetPath) ||
+            !Path.GetFileName(targetPath).Equals("RutrackerChecker.exe", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            return;
+        }
+
+        DialogResult answer = MessageBox.Show(
+            "Create a desktop shortcut for RuTracker Checker?",
+            "RuTracker Checker",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question,
+            MessageBoxDefaultButton.Button1
+        );
+
+        if (answer != DialogResult.Yes)
+        {
+            MarkShortcutPrompted(promptedPath);
+            return;
+        }
+
+        try
+        {
+            CreateDesktopShortcut(shortcutPath, targetPath, appDir);
+            MarkShortcutPrompted(promptedPath);
+        }
+        catch (Exception ex)
+        {
+            File.AppendAllText(
+                launcherLog,
+                $"{DateTime.Now:O} desktop shortcut failed: {ex}{Environment.NewLine}"
+            );
+            MessageBox.Show(
+                $"Could not create the desktop shortcut:\n{ex.Message}",
+                "RuTracker Checker",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning
+            );
+        }
+    }
+
+    private static void CreateDesktopShortcut(string shortcutPath, string targetPath, string appDir)
+    {
+        Type? shellType = Type.GetTypeFromProgID("WScript.Shell");
+        if (shellType is null)
+        {
+            throw new InvalidOperationException("Windows Script Host is not available.");
+        }
+
+        object? shell = null;
+        object? shortcut = null;
+        try
+        {
+            shell = Activator.CreateInstance(shellType);
+            if (shell is null)
+            {
+                throw new InvalidOperationException("Could not create Windows Script Host shell.");
+            }
+
+            shortcut = shellType.InvokeMember(
+                "CreateShortcut",
+                System.Reflection.BindingFlags.InvokeMethod,
+                null,
+                shell,
+                [shortcutPath]
+            );
+            if (shortcut is null)
+            {
+                throw new InvalidOperationException("Could not create shortcut object.");
+            }
+
+            Type shortcutType = shortcut.GetType();
+            shortcutType.InvokeMember("TargetPath", System.Reflection.BindingFlags.SetProperty, null, shortcut, [targetPath]);
+            shortcutType.InvokeMember("WorkingDirectory", System.Reflection.BindingFlags.SetProperty, null, shortcut, [appDir]);
+            shortcutType.InvokeMember("IconLocation", System.Reflection.BindingFlags.SetProperty, null, shortcut, [targetPath]);
+            shortcutType.InvokeMember(
+                "Description",
+                System.Reflection.BindingFlags.SetProperty,
+                null,
+                shortcut,
+                ["Open RuTracker Release Checker"]
+            );
+            shortcutType.InvokeMember("Save", System.Reflection.BindingFlags.InvokeMethod, null, shortcut, []);
+        }
+        finally
+        {
+            if (shortcut is not null && Marshal.IsComObject(shortcut))
+            {
+                Marshal.FinalReleaseComObject(shortcut);
+            }
+            if (shell is not null && Marshal.IsComObject(shell))
+            {
+                Marshal.FinalReleaseComObject(shell);
+            }
+        }
+    }
+
+    private static void MarkShortcutPrompted(string promptedPath)
+    {
+        try
+        {
+            File.WriteAllText(promptedPath, DateTime.UtcNow.ToString("O"));
+        }
+        catch
+        {
+        }
     }
 
     private static void StartTrayIfBackgroundEnabled(string appDir, bool backgroundEnabled)
