@@ -185,6 +185,15 @@ function formatRelative(value) {
   return deltaSeconds >= 0 ? `через ${text}` : `${text} назад`;
 }
 
+function pluralRu(count, one, few, many) {
+  const value = Math.abs(Number(count) || 0);
+  const mod10 = value % 10;
+  const mod100 = value % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+  return many;
+}
+
 function applyTheme(theme = localStorage.getItem("theme") || "dark") {
   document.body.classList.toggle("light", theme === "light");
   localStorage.setItem("theme", theme);
@@ -274,7 +283,8 @@ function renderRuntime() {
   } else if (runtime.background_running) {
     runtimePanel.classList.add("running");
     runtimeTitle.textContent = "Фон работает";
-    runtimeSummary.textContent = `${runtime.pending_new_count || 0} новых релизов ждут просмотра.`;
+    const pendingItems = runtime.pending_new_item_count || 0;
+    runtimeSummary.textContent = `${pendingItems} ${pluralRu(pendingItems, "фильм", "фильма", "фильмов")} с NEW ждут просмотра.`;
   } else {
     runtimePanel.classList.add("stale");
     runtimeTitle.textContent = "Фон не найден";

@@ -944,6 +944,57 @@ class DatabaseTests(unittest.TestCase):
             self.assertLessEqual(next_reminder, after)
             db.close()
 
+    def test_runtime_counts_movies_with_pending_new_separately_from_releases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            first = db.create_item({"title": "Movie A", "query": "Movie A"})
+            second = db.create_item({"title": "Movie B", "query": "Movie B"})
+            db.save_results(
+                first["id"],
+                [
+                    SearchResult(
+                        topic_id="111",
+                        title="Movie A WEB-DL 1080p",
+                        url="https://rutracker.org/forum/viewtopic.php?t=111",
+                        seeders=10,
+                        resolution="1080p",
+                        size_bytes=5_000_000_000,
+                        size_label="4.66 GB",
+                    ),
+                    SearchResult(
+                        topic_id="112",
+                        title="Movie A UHD 2160p",
+                        url="https://rutracker.org/forum/viewtopic.php?t=112",
+                        seeders=12,
+                        resolution="2160p",
+                        size_bytes=10_000_000_000,
+                        size_label="9.31 GB",
+                    ),
+                ],
+            )
+            db.save_results(
+                second["id"],
+                [
+                    SearchResult(
+                        topic_id="221",
+                        title="Movie B WEB-DL 1080p",
+                        url="https://rutracker.org/forum/viewtopic.php?t=221",
+                        seeders=8,
+                        resolution="1080p",
+                        size_bytes=5_000_000_000,
+                        size_label="4.66 GB",
+                    )
+                ],
+            )
+
+            runtime_path = Path(tmp) / "runtime_status.json"
+            with patch.object(app, "DB", db), patch.object(app, "RUNTIME_STATUS_PATH", runtime_path):
+                runtime = app.read_runtime_status()
+
+            self.assertEqual(runtime["pending_new_count"], 3)
+            self.assertEqual(runtime["pending_new_item_count"], 2)
+            db.close()
+
 
 if __name__ == "__main__":
     unittest.main()

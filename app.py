@@ -1761,7 +1761,9 @@ def read_runtime_status() -> dict[str, Any]:
         heartbeat_at is not None
         and now - heartbeat_at <= dt.timedelta(seconds=BACKGROUND_STALE_SECONDS)
     )
-    pending_count = sum(int(item.get("new_count") or 0) for item in DB.list_items())
+    items = DB.list_items()
+    pending_count = sum(int(item.get("new_count") or 0) for item in items)
+    pending_item_count = sum(1 for item in items if int(item.get("new_count") or 0) > 0)
     reminder_hours = DB.get_setting_int(
         "reminder_interval_hours", DEFAULT_REMINDER_INTERVAL_HOURS
     )
@@ -1792,6 +1794,7 @@ def read_runtime_status() -> dict[str, Any]:
             "check_interval_minutes", DEFAULT_CHECK_INTERVAL_MINUTES
         ),
         "pending_new_count": pending_count,
+        "pending_new_item_count": pending_item_count,
         "reminder_interval_hours": reminder_hours,
         "next_reminder_at": next_reminder_at.isoformat() if next_reminder_at else None,
     }
