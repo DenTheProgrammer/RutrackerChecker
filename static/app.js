@@ -11,6 +11,8 @@ const movieModal = document.querySelector("#movieModal");
 const movieForm = document.querySelector("#movieForm");
 const modalTitle = document.querySelector("#modalTitle");
 const modalCloseButton = document.querySelector("#modalCloseButton");
+const movieAdvanced = document.querySelector("#movieAdvanced");
+const movieSubmitLabel = document.querySelector("#movieSubmitLabel");
 const metadataButton = document.querySelector("#metadataButton");
 const settingsForm = document.querySelector("#settingsForm");
 const settingsState = document.querySelector("#settingsState");
@@ -36,6 +38,7 @@ let posterPollInFlight = false;
 const POSTER_POLL_INTERVAL_MS = 3000;
 const POSTER_POLL_DURATION_MS = 60000;
 const RECENT_METADATA_ATTEMPT_MS = 24 * 60 * 60 * 1000;
+const SECRET_PLACEHOLDER = "••••••••••••";
 
 const sessionId = crypto.randomUUID
   ? crypto.randomUUID()
@@ -149,14 +152,13 @@ function applyTheme(theme = localStorage.getItem("theme") || "dark") {
 }
 
 function posterFallback(title) {
-  const words = String(title || "Movie")
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 3)
-    .join(" ");
+  const words = String(title || "Movie").trim();
   const wrapper = document.createElement("div");
   wrapper.className = "fallback-poster";
   const text = document.createElement("strong");
+  const length = words.length;
+  const fontSize = length > 58 ? 15 : length > 42 ? 17 : length > 28 ? 19 : 23;
+  text.style.setProperty("--fallback-font", `${fontSize}px`);
   text.textContent = words || "Movie";
   wrapper.append(text);
   return wrapper;
@@ -192,17 +194,16 @@ function applySettingsToForms() {
   settingsForm.rutracker_username.value = config.rutracker_username || "";
   settingsForm.rutracker_password.value = "";
   settingsForm.rutracker_password.placeholder = config.has_rutracker_password
-    ? "Сохранен · пусто = не менять"
+    ? SECRET_PLACEHOLDER
     : "Обязательно";
   settingsForm.telegram_bot_token.value = "";
   settingsForm.telegram_bot_token.placeholder = config.has_telegram_bot_token
-    ? "Сохранен · пусто = не менять"
+    ? SECRET_PLACEHOLDER
     : "Опционально";
   settingsForm.telegram_chat_id.value = config.telegram_chat_id || "";
   settingsForm.default_min_seeders.value = config.default_min_seeders ?? 5;
   settingsForm.default_min_size_gb.value = config.default_min_size_gb ?? 5;
   settingsForm.default_require_1080p.checked = Boolean(config.default_require_1080p);
-  settingsForm.background_enabled.checked = Boolean(config.background_enabled);
   backgroundToggle.checked = Boolean(config.background_enabled);
   settingsForm.check_interval_minutes.value = config.check_interval_minutes ?? 360;
   settingsForm.reminder_interval_hours.value = config.reminder_interval_hours ?? 12;
@@ -214,7 +215,7 @@ function applySettingsToForms() {
     gatePassword.value = "";
   }
   gatePassword.placeholder = config.has_rutracker_password
-    ? "Сохранен · можно оставить пустым"
+    ? SECRET_PLACEHOLDER
     : "Обязательно";
   credentialGate.hidden = hasCredentials();
   isHydratingSettings = false;
@@ -317,13 +318,6 @@ function createMovieCard(item) {
     poster.append(posterFallback(item.title || item.query));
   }
 
-  if (!item.enabled) {
-    const disabled = document.createElement("span");
-    disabled.className = "disabled-badge";
-    disabled.textContent = "пауза";
-    poster.append(disabled);
-  }
-
   if (Number(item.new_count || 0) > 0) {
     const badge = document.createElement("span");
     badge.className = "new-badge";
@@ -409,11 +403,13 @@ function openMovieModal(item = null) {
   fields.require_1080p.checked = item
     ? Boolean(item.require_1080p)
     : Boolean(config.default_require_1080p ?? true);
-  fields.enabled.checked = item ? Boolean(item.enabled) : true;
   modalTitle.textContent = item ? "Редактировать фильм" : "Новый фильм";
+  movieSubmitLabel.textContent = item ? "Сохранить" : "Добавить";
+  movieAdvanced.open = Boolean(item);
   metadataButton.hidden = !item;
+  metadataButton.parentElement.hidden = !item;
   movieModal.hidden = false;
-  setTimeout(() => fields.title.focus(), 0);
+  setTimeout(() => fields.query.focus(), 0);
 }
 
 function closeMovieModal() {
@@ -440,7 +436,7 @@ async function saveMovie(event) {
     data.min_seeders = Number(data.min_seeders || 0);
     data.min_size_gb = Number(data.min_size_gb || 0);
     data.require_1080p = movieForm.elements.require_1080p.checked;
-    data.enabled = movieForm.elements.enabled.checked;
+    data.enabled = true;
 
     const item = id
       ? await api(`/api/items/${id}`, { method: "PATCH", body: JSON.stringify(data) })
@@ -580,7 +576,7 @@ function collectSettingsPayload() {
     default_min_seeders: Number(settingsForm.default_min_seeders.value || 0),
     default_min_size_gb: Number(settingsForm.default_min_size_gb.value || 0),
     default_require_1080p: settingsForm.default_require_1080p.checked,
-    background_enabled: settingsForm.background_enabled.checked,
+    background_enabled: backgroundToggle.checked,
     check_interval_minutes: Number(settingsForm.check_interval_minutes.value || 0),
     reminder_interval_hours: Number(settingsForm.reminder_interval_hours.value || 0),
     max_search_pages: Number(settingsForm.max_search_pages.value || 3),
@@ -600,7 +596,6 @@ async function saveSettings(payload = collectSettingsPayload()) {
     const updated = await api("/api/settings", { method: "PATCH", body: JSON.stringify(payload) });
     state.config = { ...state.config, ...updated };
     if (typeof payload.background_enabled !== "undefined") {
-      settingsForm.background_enabled.checked = Boolean(updated.background_enabled);
       backgroundToggle.checked = Boolean(updated.background_enabled);
       await refreshRuntime();
     }
@@ -634,7 +629,6 @@ themeToggle.addEventListener("click", () => {
 });
 
 backgroundToggle.addEventListener("change", () => {
-  settingsForm.background_enabled.checked = backgroundToggle.checked;
   saveSettings({ background_enabled: backgroundToggle.checked });
 });
 
@@ -676,9 +670,6 @@ settingsForm.addEventListener("input", (event) => {
 settingsForm.addEventListener("change", (event) => {
   if (isHydratingSettings) return;
   if (event.target.matches("input[type='checkbox']")) {
-    if (event.target.name === "background_enabled") {
-      backgroundToggle.checked = event.target.checked;
-    }
     saveSettings();
   }
 });

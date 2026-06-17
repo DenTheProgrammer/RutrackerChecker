@@ -22,7 +22,7 @@
       </button>
       <label class="header-switch" title="Фоновая проверка">
         <input id="backgroundToggle" type="checkbox" checked>
-        <span>Фон</span>
+        <span>Фоновая проверка</span>
       </label>
       <button id="settingsToggle" class="ghost-button" type="button">
         <span data-icon="settings"></span>
@@ -127,10 +127,6 @@
           <input name="default_require_1080p" type="checkbox" checked>
           <span>1080p+</span>
         </label>
-        <label class="switch-field">
-          <input name="background_enabled" type="checkbox" checked>
-          <span>Фон</span>
-        </label>
       </form>
     </section>
 
@@ -151,50 +147,58 @@
       </button>
       <div class="modal-heading">
         <h2 id="modalTitle">Новый фильм</h2>
-        <p>Название для карточки, поисковая фраза RuTracker и опциональная IMDb-ссылка для постера.</p>
+        <p>Введите запрос RuTracker. Название, постер и фильтры можно уточнить в расширенных настройках.</p>
       </div>
       <form id="movieForm" class="movie-form">
         <input name="id" type="hidden">
         <label class="wide">
-          <span>Название</span>
-          <input name="title" placeholder="Dune: Part Three">
-        </label>
-        <label class="wide">
           <span>Поиск RuTracker</span>
           <input name="query" placeholder="dune part three 2026" required>
         </label>
-        <label class="wide">
-          <span>IMDb ссылка</span>
-          <input name="imdb_url" inputmode="url" placeholder="https://www.imdb.com/title/tt.../">
-        </label>
-        <label class="wide">
-          <span>Poster URL</span>
-          <input name="poster_url" inputmode="url" placeholder="https://.../poster.jpg">
-        </label>
-        <label>
-          <span>Мин. сидов</span>
-          <input name="min_seeders" type="number" min="0" value="5">
-        </label>
-        <label>
-          <span>Мин. GB</span>
-          <input name="min_size_gb" type="number" min="0" step="0.1" value="5">
-        </label>
-        <label class="switch-field">
-          <input name="require_1080p" type="checkbox" checked>
-          <span>Только 1080p+</span>
-        </label>
-        <label class="switch-field">
-          <input name="enabled" type="checkbox" checked>
-          <span>Включено</span>
-        </label>
-        <div class="modal-actions wide">
-          <button id="metadataButton" class="ghost-button" type="button">
-            <span data-icon="image"></span>
-            Найти постер
-          </button>
+
+        <details id="movieAdvanced" class="advanced-settings wide">
+          <summary>
+            <span>Расширенные настройки</span>
+            <span class="advanced-hint">постер, IMDb и фильтры</span>
+          </summary>
+          <div class="advanced-grid">
+            <label class="wide">
+              <span>Название карточки</span>
+              <input name="title" placeholder="Dune: Part Three">
+            </label>
+            <label class="wide">
+              <span>IMDb ссылка</span>
+              <input name="imdb_url" inputmode="url" placeholder="https://www.imdb.com/title/tt.../">
+            </label>
+            <label class="wide">
+              <span>Poster URL</span>
+              <input name="poster_url" inputmode="url" placeholder="https://.../poster.jpg">
+            </label>
+            <label>
+              <span>Мин. сидов</span>
+              <input name="min_seeders" type="number" min="0" value="5">
+            </label>
+            <label>
+              <span>Мин. GB</span>
+              <input name="min_size_gb" type="number" min="0" step="0.1" value="5">
+            </label>
+            <label class="switch-field advanced-switch">
+              <input name="require_1080p" type="checkbox" checked>
+              <span>Только 1080p+</span>
+            </label>
+          </div>
+          <div class="advanced-actions">
+            <button id="metadataButton" class="ghost-button" type="button">
+              <span data-icon="image"></span>
+              Найти постер
+            </button>
+          </div>
+        </details>
+
+        <div class="modal-actions modal-actions-primary wide">
           <button class="primary-button" type="submit">
             <span data-icon="save"></span>
-            Сохранить
+            <span id="movieSubmitLabel">Добавить</span>
           </button>
         </div>
       </form>
