@@ -583,10 +583,9 @@ button:disabled {
 
 .movie-card.is-card-checking .poster::before {
   background:
-    linear-gradient(120deg, transparent 18%, rgba(255, 255, 255, 0.2) 42%, transparent 64%),
-    color-mix(in srgb, var(--primary) 18%, transparent);
-  background-size: 220% 100%, auto;
-  animation: poster-check-shimmer 1.9s ease-in-out infinite;
+    radial-gradient(circle at 50% 24%, rgba(255, 255, 255, 0.12), transparent 58%),
+    color-mix(in srgb, var(--primary) 15%, transparent);
+  animation: poster-check-glow 1.65s ease-in-out infinite;
 }
 
 .movie-card.is-card-queued .poster::before {
@@ -608,13 +607,17 @@ button:disabled {
   }
 }
 
-@keyframes poster-check-shimmer {
+@keyframes poster-check-glow {
   0% {
-    background-position: 150% 0, 0 0;
+    opacity: 0.72;
+  }
+
+  50% {
+    opacity: 1;
   }
 
   100% {
-    background-position: -80% 0, 0 0;
+    opacity: 0.72;
   }
 }
 
