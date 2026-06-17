@@ -568,14 +568,21 @@ button:disabled {
   fill: currentColor;
   stroke: none;
   font-family: "Segoe UI", Arial, sans-serif;
-  font-size: 6px;
-  font-weight: 850;
+  font-size: 7.4px;
+  font-weight: 900;
   letter-spacing: 0;
   dominant-baseline: middle;
 }
 
 .icon .icon-slash {
-  stroke-width: 2.6;
+  opacity: 0.9;
+  stroke-width: 2.1;
+}
+
+.reset-new-button .icon {
+  width: 24px;
+  height: 24px;
+  flex-basis: 24px;
 }
 
 @keyframes spin-refresh {
@@ -636,6 +643,7 @@ button:disabled {
   position: absolute;
   inset: 0;
   z-index: 1;
+  border-radius: inherit;
   pointer-events: none;
 }
 
@@ -862,8 +870,8 @@ button:disabled {
 
 .card-actions {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
   padding: 0 12px 14px;
 }
 

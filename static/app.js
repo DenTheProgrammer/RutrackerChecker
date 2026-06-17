@@ -73,7 +73,7 @@ const icons = {
   moon: '<path d="M12 3a6 6 0 0 0 9 7.5A9 9 0 1 1 12 3Z"/>',
   plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
   refresh: '<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12A9 9 0 0 1 18.5 5.8L21 8"/><path d="M21 3v5h-5"/>',
-  reset: '<text class="icon-text" x="12" y="13" text-anchor="middle">NEW</text><path class="icon-slash" d="M4 19 20 5"/>',
+  reset: '<path class="icon-slash" d="M4.5 18.5 19.5 5.5"/><text class="icon-text" x="12" y="12.5" text-anchor="middle">NEW</text>',
   save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/>',
   search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
   settings: '<path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1A2 2 0 1 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z"/>',
@@ -447,8 +447,7 @@ function createMovieCard(item) {
   actions.append(
     cardButton("edit", "Редактировать", () => openMovieModal(item)),
     cardButton("refresh", "Проверить", () => checkItem(item)),
-    cardButton("reset", "Сбросить NEW", () => resetNew(item), Number(item.new_count || 0) <= 0),
-    cardButton("image", "Найти постер", () => refreshMetadata(item.id), Boolean(item.poster_url)),
+    cardButton("reset", "Сбросить NEW", () => resetNew(item), Number(item.new_count || 0) <= 0, "reset-new-button"),
     cardButton("external", "IMDb", () => window.open(item.imdb_url, "_blank", "noreferrer"), !item.imdb_url),
     cardButton("trash", "Удалить", () => deleteItem(item), false, "danger-button"),
   );
