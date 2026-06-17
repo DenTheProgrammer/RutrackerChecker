@@ -41,9 +41,9 @@ Open http://127.0.0.1:9876.
 
 ## Background Checks
 
-The UI server only checks while its process is running unless `Keep checking in background` is enabled in Settings. When background checks are enabled, launching `RutrackerChecker.exe` or saving the setting starts the tray icon. Starting it again replaces the existing tray/background loop from this folder instead of creating duplicates. When the setting is disabled, the tray icon and background loop stop.
+The UI server only checks while its process is running unless `Keep checking in background` is enabled in Settings. When background checks are enabled, launching `RutrackerChecker.exe` or saving the setting starts the tray icon. On first launcher start, the app asks whether it may add the background checker to Windows Startup so checks resume after the next logon. Starting it again replaces the existing tray/background loop from this folder instead of creating duplicates. When the setting is disabled, the tray icon and background loop stop.
 
-For unattended checks after Windows logon, install the Windows Startup background entry:
+If you skipped the launcher prompt, you can install the Windows Startup background entry manually:
 
 ```powershell
 .\install_startup.ps1

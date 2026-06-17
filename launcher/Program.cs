@@ -12,7 +12,9 @@ internal static class Program
     private const string AppPort = "9876";
     private const string RequiredVersion = "1.5.1";
     private const string ShortcutName = "RuTracker Checker.lnk";
+    private const string StartupShortcutName = "RutrackerChecker Background.lnk";
     private const string ShortcutPromptFileName = "desktop-shortcut-prompted.flag";
+    private const string StartupPromptFileName = "startup-prompted.flag";
 
     [STAThread]
     private static async Task Main(string[] args)
@@ -45,6 +47,10 @@ internal static class Program
         if (state.IsChecker)
         {
             StartTrayIfBackgroundEnabled(appDir, state.BackgroundEnabled);
+            if (!serverOnly)
+            {
+                PromptForStartupIfNeeded(appDir, dataDir, launcherLog, state.BackgroundEnabled);
+            }
             if (serverOnly)
             {
                 return;
@@ -131,6 +137,10 @@ internal static class Program
 
         state = await GetServerState();
         StartTrayIfBackgroundEnabled(appDir, state.BackgroundEnabled);
+        if (!serverOnly)
+        {
+            PromptForStartupIfNeeded(appDir, dataDir, launcherLog, state.BackgroundEnabled);
+        }
         if (serverOnly)
         {
             return;
@@ -369,6 +379,210 @@ internal static class Program
 
     private static void CreateDesktopShortcut(string shortcutPath, string targetPath, string appDir)
     {
+        CreateShortcut(
+            shortcutPath,
+            targetPath,
+            appDir,
+            targetPath,
+            "Open RuTracker Release Checker"
+        );
+    }
+
+    private static void PromptForStartupIfNeeded(
+        string appDir,
+        string dataDir,
+        string launcherLog,
+        bool backgroundEnabled
+    )
+    {
+        if (!backgroundEnabled)
+        {
+            return;
+        }
+
+        string promptedPath = Path.Combine(dataDir, StartupPromptFileName);
+        if (File.Exists(promptedPath))
+        {
+            return;
+        }
+
+        string startupDir = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
+        if (string.IsNullOrWhiteSpace(startupDir))
+        {
+            return;
+        }
+
+        string shortcutPath = Path.Combine(startupDir, StartupShortcutName);
+        if (File.Exists(shortcutPath))
+        {
+            MarkShortcutPrompted(promptedPath);
+            return;
+        }
+
+        string targetPath = Path.Combine(appDir, "start_background.vbs");
+        if (!File.Exists(targetPath) || !IsRunningPackagedLauncher())
+        {
+            return;
+        }
+
+        DialogResult answer = ShowStartupPrompt();
+        if (answer != DialogResult.Yes)
+        {
+            MarkShortcutPrompted(promptedPath);
+            return;
+        }
+
+        try
+        {
+            CreateShortcut(
+                shortcutPath,
+                targetPath,
+                appDir,
+                Environment.ProcessPath ?? targetPath,
+                "Start RuTracker Checker background checks at Windows logon"
+            );
+            MarkShortcutPrompted(promptedPath);
+            StartTrayIfBackgroundEnabled(appDir, backgroundEnabled);
+        }
+        catch (Exception ex)
+        {
+            File.AppendAllText(
+                launcherLog,
+                $"{DateTime.Now:O} startup shortcut failed: {ex}{Environment.NewLine}"
+            );
+            MessageBox.Show(
+                $"Could not add RuTracker Checker to Startup:\n{ex.Message}",
+                "RuTracker Checker",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning
+            );
+        }
+    }
+
+    private static DialogResult ShowStartupPrompt()
+    {
+        using Form form = new()
+        {
+            Text = "RuTracker Checker",
+            StartPosition = FormStartPosition.CenterScreen,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+            ShowInTaskbar = false,
+            ClientSize = new Size(560, 310)
+        };
+
+        TableLayoutPanel root = new()
+        {
+            Dock = DockStyle.Fill,
+            Padding = new Padding(18),
+            ColumnCount = 1,
+            RowCount = 4
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        Label title = new()
+        {
+            AutoSize = true,
+            Font = new Font((form.Font ?? SystemFonts.MessageBoxFont)!, FontStyle.Bold),
+            Text = "Разрешить автопроверки после перезагрузки?"
+        };
+
+        TableLayoutPanel table = new()
+        {
+            Dock = DockStyle.Fill,
+            CellBorderStyle = TableLayoutPanelCellBorderStyle.Single,
+            ColumnCount = 2,
+            RowCount = 4,
+            Margin = new Padding(0, 14, 0, 10)
+        };
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 145));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+        AddStartupPromptRow(table, 0, "Что добавится", "Ярлык RuTracker Checker Background в автозагрузку Windows.");
+        AddStartupPromptRow(table, 1, "Зачем", "Чтобы фоновые проверки и напоминания запускались после входа в Windows.");
+        AddStartupPromptRow(table, 2, "Что не делает", "Не открывает окно приложения само по себе и не скачивает торренты.");
+        AddStartupPromptRow(table, 3, "Как отключить", "Через меню tray-иконки или скрипт uninstall_startup.ps1.");
+
+        Label note = new()
+        {
+            AutoSize = true,
+            MaximumSize = new Size(520, 0),
+            ForeColor = SystemColors.GrayText,
+            Text = "Можно пропустить: текущая сессия продолжит работать, но после перезагрузки автопроверки сами не стартуют."
+        };
+
+        FlowLayoutPanel buttons = new()
+        {
+            FlowDirection = FlowDirection.RightToLeft,
+            Dock = DockStyle.Fill,
+            AutoSize = true
+        };
+        Button allow = new()
+        {
+            Text = "Добавить в автозагрузку",
+            DialogResult = DialogResult.Yes,
+            AutoSize = true
+        };
+        Button skip = new()
+        {
+            Text = "Не сейчас",
+            DialogResult = DialogResult.No,
+            AutoSize = true
+        };
+        buttons.Controls.Add(allow);
+        buttons.Controls.Add(skip);
+
+        form.AcceptButton = allow;
+        form.CancelButton = skip;
+        form.Controls.Add(root);
+        root.Controls.Add(title, 0, 0);
+        root.Controls.Add(table, 0, 1);
+        root.Controls.Add(note, 0, 2);
+        root.Controls.Add(buttons, 0, 3);
+
+        return form.ShowDialog();
+    }
+
+    private static void AddStartupPromptRow(TableLayoutPanel table, int row, string heading, string body)
+    {
+        table.RowStyles.Add(new RowStyle(SizeType.Percent, 25));
+        table.Controls.Add(new Label
+        {
+            Dock = DockStyle.Fill,
+            Padding = new Padding(10, 8, 10, 8),
+            Font = new Font(SystemFonts.MessageBoxFont!, FontStyle.Bold),
+            Text = heading,
+            TextAlign = ContentAlignment.MiddleLeft
+        }, 0, row);
+        table.Controls.Add(new Label
+        {
+            Dock = DockStyle.Fill,
+            Padding = new Padding(10, 8, 10, 8),
+            Text = body,
+            TextAlign = ContentAlignment.MiddleLeft
+        }, 1, row);
+    }
+
+    private static bool IsRunningPackagedLauncher()
+    {
+        string? targetPath = Environment.ProcessPath;
+        return !string.IsNullOrWhiteSpace(targetPath)
+            && File.Exists(targetPath)
+            && Path.GetFileName(targetPath).Equals("RutrackerChecker.exe", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void CreateShortcut(
+        string shortcutPath,
+        string targetPath,
+        string workingDirectory,
+        string iconLocation,
+        string description
+    )
+    {
         Type? shellType = Type.GetTypeFromProgID("WScript.Shell");
         if (shellType is null)
         {
@@ -399,14 +613,14 @@ internal static class Program
 
             Type shortcutType = shortcut.GetType();
             shortcutType.InvokeMember("TargetPath", System.Reflection.BindingFlags.SetProperty, null, shortcut, [targetPath]);
-            shortcutType.InvokeMember("WorkingDirectory", System.Reflection.BindingFlags.SetProperty, null, shortcut, [appDir]);
-            shortcutType.InvokeMember("IconLocation", System.Reflection.BindingFlags.SetProperty, null, shortcut, [targetPath]);
+            shortcutType.InvokeMember("WorkingDirectory", System.Reflection.BindingFlags.SetProperty, null, shortcut, [workingDirectory]);
+            shortcutType.InvokeMember("IconLocation", System.Reflection.BindingFlags.SetProperty, null, shortcut, [iconLocation]);
             shortcutType.InvokeMember(
                 "Description",
                 System.Reflection.BindingFlags.SetProperty,
                 null,
                 shortcut,
-                ["Open RuTracker Release Checker"]
+                [description]
             );
             shortcutType.InvokeMember("Save", System.Reflection.BindingFlags.InvokeMethod, null, shortcut, []);
         }
