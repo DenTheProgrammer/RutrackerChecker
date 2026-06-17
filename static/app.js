@@ -500,6 +500,9 @@ function openMovieModal(item = null) {
   fields.require_1080p.checked = item
     ? Boolean(item.require_1080p)
     : Boolean(config.default_require_1080p ?? true);
+  fields.sync_search_from_imdb.checked = item
+    ? Boolean(item.sync_search_from_imdb)
+    : true;
   modalTitle.textContent = item ? "Редактировать фильм" : "Новый фильм";
   movieSubmitLabel.textContent = item ? "Сохранить" : "Добавить";
   movieAdvanced.open = Boolean(item);
@@ -557,6 +560,7 @@ async function saveMovie(event) {
     data.min_seeders = Number(data.min_seeders || 0);
     data.min_size_gb = Number(data.min_size_gb || 0);
     data.require_1080p = movieForm.elements.require_1080p.checked;
+    data.sync_search_from_imdb = movieForm.elements.sync_search_from_imdb.checked;
     data.enabled = true;
 
     const item = id
@@ -582,18 +586,18 @@ async function saveMovie(event) {
 
 async function refreshMetadata(itemId = movieForm.elements.id.value) {
   if (!itemId) {
-    statusLine.textContent = "Сначала сохраните карточку, потом обновите постер.";
+    statusLine.textContent = "Сначала сохраните карточку, потом обновите данные IMDb.";
     return;
   }
-  statusLine.textContent = "Ищем постер...";
+  statusLine.textContent = "Ищем данные на IMDb...";
   try {
     const payload = await api(`/api/items/${itemId}/refresh-metadata`, { method: "POST" });
     await load();
     statusLine.textContent = payload.metadata_error
-      ? "Постер не найден, оставили fallback."
-      : "Постер обновлен.";
+      ? "Данные IMDb не найдены, оставили текущие значения."
+      : "Данные IMDb обновлены.";
   } catch (error) {
-    statusLine.textContent = `Постер не обновился: ${error.message}`;
+    statusLine.textContent = `Данные IMDb не обновились: ${error.message}`;
   }
 }
 

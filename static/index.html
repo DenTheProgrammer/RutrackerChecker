@@ -173,6 +173,10 @@
               <span>IMDb ссылка</span>
               <input name="imdb_url" inputmode="url" placeholder="https://www.imdb.com/title/tt.../">
             </label>
+            <label class="switch-field advanced-switch wide">
+              <input name="sync_search_from_imdb" type="checkbox" checked>
+              <span>Взять данные для поиска с IMDb</span>
+            </label>
             <label class="wide">
               <span>Poster URL</span>
               <input name="poster_url" inputmode="url" placeholder="https://.../poster.jpg">
@@ -193,7 +197,7 @@
           <div class="advanced-actions">
             <button id="metadataButton" class="ghost-button" type="button">
               <span data-icon="image"></span>
-              Найти постер
+              Обновить с IMDb
             </button>
           </div>
         </details>

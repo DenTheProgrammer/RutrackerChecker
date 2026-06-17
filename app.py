@@ -390,6 +390,57 @@ def normalize_metadata_query(value: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def clean_metadata_piece(value: Any) -> str:
+    return re.sub(r"\s+", " ", unescape(str(value or ""))).strip()
+
+
+def metadata_year(value: Any) -> str:
+    text = clean_metadata_piece(value)
+    match = re.search(r"\b(19|20)\d{2}\b", text)
+    return match.group(0) if match else ""
+
+
+def metadata_directors(value: Any) -> list[str]:
+    if isinstance(value, list):
+        raw_values = value
+    else:
+        raw_values = str(value or "").split("|")
+    directors: list[str] = []
+    seen: set[str] = set()
+    for raw_value in raw_values:
+        name = clean_metadata_piece(raw_value)
+        if not name or re.fullmatch(r"Q\d+", name):
+            continue
+        key = name.casefold()
+        if key not in seen:
+            directors.append(name)
+            seen.add(key)
+    return directors
+
+
+def build_imdb_search_text(title: str, year: str = "", directors: list[str] | None = None) -> str:
+    parts = [clean_metadata_piece(title), metadata_year(year)]
+    first_director = next(iter(metadata_directors(directors or [])), "")
+    if first_director:
+        parts.append(first_director)
+    return re.sub(r"\s+", " ", " ".join(part for part in parts if part)).strip()
+
+
+def merge_movie_metadata(primary: dict[str, str], fallback: dict[str, str]) -> dict[str, str]:
+    title = clean_metadata_piece(primary.get("title") or fallback.get("title"))
+    year = metadata_year(primary.get("year") or fallback.get("year"))
+    directors = metadata_directors(primary.get("directors") or fallback.get("directors"))
+    search_text = build_imdb_search_text(title, year, directors)
+    return {
+        "imdb_url": primary.get("imdb_url") or fallback.get("imdb_url", ""),
+        "poster_url": primary.get("poster_url") or fallback.get("poster_url", ""),
+        "title": title,
+        "year": year,
+        "directors": "|".join(directors),
+        "search_text": search_text or primary.get("search_text") or fallback.get("search_text", ""),
+    }
+
+
 def imdb_suggestion_key(value: str) -> str:
     normalized = normalize_metadata_query(value)
     if not normalized:
@@ -463,10 +514,10 @@ def score_imdb_suggestion(item: dict[str, Any], search_text: str, expected_id: s
 
 def fetch_imdb_suggestion_metadata(key: str, search_text: str, expected_id: str = "") -> dict[str, str]:
     if not key:
-        return {"imdb_url": "", "poster_url": ""}
+        return {"imdb_url": "", "poster_url": "", "search_text": ""}
     first = key[0].lower()
     if not first.isalnum():
-        return {"imdb_url": "", "poster_url": ""}
+        return {"imdb_url": "", "poster_url": "", "search_text": ""}
 
     payload = fetch_json(f"{IMDB_SUGGESTION_BASE_URL}/{first}/{key}.json")
     rows = payload.get("d", []) if isinstance(payload, dict) else []
@@ -481,13 +532,18 @@ def fetch_imdb_suggestion_metadata(key: str, search_text: str, expected_id: str 
             best_score = score
 
     if not best or best_score < 0:
-        return {"imdb_url": "", "poster_url": ""}
+        return {"imdb_url": "", "poster_url": "", "search_text": ""}
 
     item_id = str(best.get("id") or "")
     image = best.get("i") if isinstance(best.get("i"), dict) else {}
+    title = clean_metadata_piece(best.get("l"))
+    year = metadata_year(best.get("y"))
     return {
         "imdb_url": f"{IMDB_BASE_URL}/title/{item_id}/",
         "poster_url": clean_external_url(image.get("imageUrl")),
+        "title": title,
+        "year": year,
+        "search_text": build_imdb_search_text(title, year),
         "_score": str(best_score),
     }
 
@@ -548,11 +604,14 @@ def fetch_wikidata_entity(entity_id: str) -> dict[str, Any]:
 
 def fetch_wikidata_metadata_by_imdb_id(imdb_id: str) -> dict[str, str]:
     if not re.fullmatch(r"tt\d+", imdb_id or ""):
-        return {"imdb_url": "", "poster_url": ""}
+        return {"imdb_url": "", "poster_url": "", "search_text": ""}
     sparql = (
-        'SELECT ?item ?image WHERE { '
+        'SELECT ?item ?itemLabel ?image ?directorLabel ?publicationDate WHERE { '
         f'?item wdt:P345 "{imdb_id}". '
         "OPTIONAL { ?item wdt:P18 ?image. } "
+        "OPTIONAL { ?item wdt:P57 ?director. } "
+        "OPTIONAL { ?item wdt:P577 ?publicationDate. } "
+        'SERVICE wikibase:label { bd:serviceParam wikibase:language "en". } '
         "} LIMIT 1"
     )
     query = urllib.parse.urlencode({"format": "json", "query": sparql})
@@ -560,13 +619,35 @@ def fetch_wikidata_metadata_by_imdb_id(imdb_id: str) -> dict[str, str]:
     results = payload.get("results", {}) if isinstance(payload, dict) else {}
     bindings = results.get("bindings", []) if isinstance(results, dict) else []
     if not bindings:
-        return {"imdb_url": "", "poster_url": ""}
-    first = bindings[0] if isinstance(bindings[0], dict) else {}
-    image = first.get("image") if isinstance(first, dict) else {}
-    poster_url = clean_external_url(image.get("value")) if isinstance(image, dict) else ""
+        return {"imdb_url": "", "poster_url": "", "search_text": ""}
+
+    poster_url = ""
+    title = ""
+    year = ""
+    directors: list[str] = []
+    for binding in bindings if isinstance(bindings, list) else []:
+        if not isinstance(binding, dict):
+            continue
+        image = binding.get("image") if isinstance(binding.get("image"), dict) else {}
+        label = binding.get("itemLabel") if isinstance(binding.get("itemLabel"), dict) else {}
+        director = binding.get("directorLabel") if isinstance(binding.get("directorLabel"), dict) else {}
+        publication_date = (
+            binding.get("publicationDate")
+            if isinstance(binding.get("publicationDate"), dict)
+            else {}
+        )
+        poster_url = poster_url or clean_external_url(image.get("value"))
+        title = title or clean_metadata_piece(label.get("value"))
+        year = year or metadata_year(publication_date.get("value"))
+        directors.extend(metadata_directors([director.get("value")]))
+    directors = metadata_directors(directors)
     return {
         "imdb_url": f"{IMDB_BASE_URL}/title/{imdb_id}/",
         "poster_url": poster_url,
+        "title": title,
+        "year": year,
+        "directors": "|".join(directors),
+        "search_text": build_imdb_search_text(title, year, directors),
     }
 
 
@@ -631,11 +712,15 @@ def fetch_wikidata_metadata_by_title(
             if imdb_id:
                 score += 25
             if score > best_score and (poster_url or imdb_id):
+                details = fetch_wikidata_metadata_by_imdb_id(imdb_id) if imdb_id else {}
                 best_score = score
-                best = {
-                    "imdb_url": f"{IMDB_BASE_URL}/title/{imdb_id}/" if imdb_id else "",
-                    "poster_url": poster_url,
-                }
+                best = merge_movie_metadata(
+                    {
+                        "imdb_url": f"{IMDB_BASE_URL}/title/{imdb_id}/" if imdb_id else "",
+                        "poster_url": poster_url,
+                    },
+                    details,
+                )
     return best
 
 
@@ -655,15 +740,22 @@ def discover_imdb_url(title: str) -> str:
 
 def fetch_movie_metadata(title: str, imdb_url: str = "", query: str = "") -> dict[str, str]:
     title_id = imdb_title_id_from_url(imdb_url)
+    best: dict[str, str] = {
+        "imdb_url": normalize_imdb_url(imdb_url),
+        "poster_url": "",
+        "search_text": "",
+    }
     if title_id:
         metadata = fetch_imdb_suggestion_metadata(title_id, title_id, expected_id=title_id)
-        if metadata.get("poster_url"):
+        details = fetch_wikidata_metadata_by_imdb_id(title_id)
+        best = merge_movie_metadata(metadata, details)
+        if best.get("poster_url"):
             return {
-                "imdb_url": metadata.get("imdb_url", ""),
-                "poster_url": metadata.get("poster_url", ""),
+                "imdb_url": best.get("imdb_url", ""),
+                "poster_url": best.get("poster_url", ""),
+                "search_text": best.get("search_text", ""),
             }
 
-    best: dict[str, str] = {"imdb_url": normalize_imdb_url(imdb_url), "poster_url": ""}
     best_score = -1
     for candidate in imdb_metadata_candidates(title, query):
         key = imdb_suggestion_key(candidate)
@@ -673,16 +765,17 @@ def fetch_movie_metadata(title: str, imdb_url: str = "", query: str = "") -> dic
             if score > best_score:
                 best = metadata
                 best_score = score
+    best_imdb_id = imdb_title_id_from_url(best.get("imdb_url", ""))
+    if best_imdb_id:
+        best = merge_movie_metadata(best, fetch_wikidata_metadata_by_imdb_id(best_imdb_id))
     if not best.get("poster_url"):
         fallback = fetch_wikidata_metadata(title, best.get("imdb_url") or imdb_url, query)
         if fallback.get("poster_url") or fallback.get("imdb_url"):
-            best = {
-                "imdb_url": fallback.get("imdb_url") or best.get("imdb_url", ""),
-                "poster_url": fallback.get("poster_url") or best.get("poster_url", ""),
-            }
+            best = merge_movie_metadata(best, fallback)
     return {
         "imdb_url": best.get("imdb_url", ""),
         "poster_url": best.get("poster_url", ""),
+        "search_text": best.get("search_text", ""),
     }
 
 
@@ -702,6 +795,7 @@ def refresh_item_metadata(db: "Database", item_id: int) -> dict[str, Any]:
             item_id,
             metadata.get("imdb_url", ""),
             metadata.get("poster_url", ""),
+            metadata.get("search_text", ""),
         )
     except Exception as exc:
         metadata_error = str(exc)
@@ -771,6 +865,7 @@ class Database:
                 min_seeders INTEGER NOT NULL DEFAULT 5,
                 min_size_gb REAL NOT NULL DEFAULT 5,
                 require_1080p INTEGER NOT NULL DEFAULT 1,
+                sync_search_from_imdb INTEGER NOT NULL DEFAULT 1,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -807,6 +902,7 @@ class Database:
         self.ensure_column(connection, "items", "poster_updated_at", "TEXT NOT NULL DEFAULT ''")
         self.ensure_column(connection, "items", "min_size_gb", "REAL NOT NULL DEFAULT 5")
         self.ensure_column(connection, "items", "require_1080p", "INTEGER NOT NULL DEFAULT 1")
+        self.ensure_column(connection, "items", "sync_search_from_imdb", "INTEGER NOT NULL DEFAULT 1")
         self.ensure_column(connection, "results", "size_bytes", "INTEGER NOT NULL DEFAULT 0")
         self.ensure_column(connection, "results", "size_label", "TEXT NOT NULL DEFAULT ''")
         connection.commit()
@@ -954,13 +1050,14 @@ class Database:
             "require_1080p",
             self.get_setting("default_require_1080p", "1") == "1",
         ) else 0
+        sync_search_from_imdb = 1 if payload.get("sync_search_from_imdb", True) else 0
         enabled = 1 if payload.get("enabled", True) else 0
         cursor = self.conn().execute(
             """
             INSERT INTO items
                 (title, query, imdb_url, poster_url, poster_updated_at,
-                 min_seeders, min_size_gb, require_1080p, enabled)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 min_seeders, min_size_gb, require_1080p, sync_search_from_imdb, enabled)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 title,
@@ -971,6 +1068,7 @@ class Database:
                 min_seeders,
                 min_size_gb,
                 require_1080p,
+                sync_search_from_imdb,
                 enabled,
             ),
         )
@@ -991,6 +1089,14 @@ class Database:
         min_seeders = int(payload.get("min_seeders", item["min_seeders"]))
         min_size_gb = float(payload.get("min_size_gb", item["min_size_gb"]))
         require_1080p = 1 if payload.get("require_1080p", bool(item["require_1080p"])) else 0
+        sync_search_from_imdb = (
+            1
+            if payload.get(
+                "sync_search_from_imdb",
+                bool(item.get("sync_search_from_imdb", 1)),
+            )
+            else 0
+        )
         enabled = 1 if payload.get("enabled", bool(item["enabled"])) else 0
         if not query:
             raise ValueError("query is required")
@@ -1003,7 +1109,8 @@ class Database:
                     WHEN poster_url <> ? THEN ?
                     ELSE poster_updated_at
                 END,
-                min_seeders = ?, min_size_gb = ?, require_1080p = ?, enabled = ?,
+                min_seeders = ?, min_size_gb = ?, require_1080p = ?,
+                sync_search_from_imdb = ?, enabled = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
             """,
@@ -1017,6 +1124,7 @@ class Database:
                 min_seeders,
                 min_size_gb,
                 require_1080p,
+                sync_search_from_imdb,
                 enabled,
                 item_id,
             ),
@@ -1031,21 +1139,31 @@ class Database:
         item_id: int,
         imdb_url: str,
         poster_url: str,
+        search_text: str = "",
     ) -> dict[str, Any]:
-        if self.get_item(item_id) is None:
+        item = self.get_item(item_id)
+        if item is None:
             raise KeyError("item not found")
         imdb_url = normalize_imdb_url(imdb_url)
         poster_url = clean_external_url(poster_url)
+        search_text = clean_metadata_piece(search_text)
+        should_sync_search = bool(item.get("sync_search_from_imdb", 1))
+        title = search_text if search_text and should_sync_search else item["title"]
+        query = search_text if search_text and should_sync_search else item["query"]
         self.conn().execute(
             """
             UPDATE items
-            SET imdb_url = COALESCE(NULLIF(?, ''), imdb_url),
+            SET title = ?,
+                query = ?,
+                imdb_url = COALESCE(NULLIF(?, ''), imdb_url),
                 poster_url = COALESCE(NULLIF(?, ''), poster_url),
                 poster_updated_at = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
             """,
             (
+                title,
+                query,
                 imdb_url,
                 poster_url,
                 dt.datetime.now(dt.timezone.utc).isoformat(),
