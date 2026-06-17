@@ -31,10 +31,11 @@ Open http://127.0.0.1:9876.
 
 ## Usage
 
-- Add a title and a RuTracker search query, for example `Drama 2025`.
+- Add a RuTracker search query, for example `Drama 2025`. A new card is created immediately, and its first RuTracker check starts in the background.
+- Use the advanced settings in the movie dialog to override the displayed title, poster, IMDb URL, or filters.
 - By default, searches run across all RuTracker sections, matching the normal site search.
 - Set the minimum number of seeders and minimum size in GB.
-- Click `Check` for one query or `Check all` for all enabled queries.
+- Click `Check` for one query or `Check all` for all enabled queries. Manual `Check all` runs in the background and each card stops showing its check spinner as soon as that card's RuTracker request finishes.
 - Click a title to open the RuTracker search page.
 - Review new result links manually, then click `Reset new` to clear the badge.
 
@@ -70,9 +71,9 @@ If you prefer Windows Task Scheduler instead, `install_task.ps1` and `uninstall_
 - `RUTRACKER_REQUEST_ATTEMPTS`: retry attempts for each RuTracker HTTP request; default is `3`.
 - `RUTRACKER_REQUEST_TIMEOUT_SECONDS`: per-request RuTracker timeout; default is `12`.
 - `RUTRACKER_RETRY_BASE_SECONDS`: base delay between RuTracker request retries; default is `1`.
-- `INITIAL_ITEM_CHECK_ATTEMPTS`: extra retries for temporary RuTracker pages after adding a new item; default is `2`.
-- `INITIAL_ITEM_CHECK_RETRY_SECONDS`: delay between those new-item retries; default is `3`.
-- `CHECK_ALL_MAX_WORKERS`: simultaneous item checks for the manual "check all" action; default is `3`.
+- `INITIAL_ITEM_CHECK_ATTEMPTS`: attempts for the first background check after adding a new item; default is `2`.
+- `INITIAL_ITEM_CHECK_RETRY_SECONDS`: delay between those new-item attempts; default is `3`.
+- `CHECK_ALL_MAX_WORKERS`: simultaneous RuTracker requests for the manual "check all" action; default is `3`. All enabled cards enter the checking state immediately, but requests are limited to this worker count.
 - `AUTO_SHUTDOWN_WHEN_IDLE`: `1` stops the server after all UI tabs are closed.
 - `AUTO_SHUTDOWN_GRACE_SECONDS`: idle close delay; default is `45`.
 - `APP_HOST` and `APP_PORT`: local server address.
@@ -83,7 +84,7 @@ If you prefer Windows Task Scheduler instead, `install_task.ps1` and `uninstall_
 .\run.ps1 -Test
 ```
 
-The tests cover RuTracker HTML parsing, filtering, SQLite idempotency, and reset behavior.
+The tests cover RuTracker HTML parsing, filtering, SQLite idempotency, reset behavior, background item checks, and manual check-all state tracking.
 
 ## Build Launcher
 
