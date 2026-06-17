@@ -301,7 +301,7 @@ class GitUpdateServiceTests(unittest.TestCase):
         self.assertEqual(status.state, "blocked_dirty")
         self.assertFalse(status.can_apply)
 
-    def test_status_blocks_ahead_branch(self):
+    def test_status_hides_update_prompt_for_ahead_branch(self):
         overrides = {
             ("rev-parse", "HEAD"): (0, "bbb\n", ""),
             ("merge-base", "HEAD", "@{u}"): (0, "aaa\n", ""),
@@ -312,10 +312,11 @@ class GitUpdateServiceTests(unittest.TestCase):
             with patch("app.subprocess.run", side_effect=self.git_run(overrides)):
                 status = service.get_status(force_fetch=True)
 
-        self.assertEqual(status.state, "blocked_ahead")
+        self.assertEqual(status.state, "local_ahead")
+        self.assertFalse(status.update_available)
         self.assertFalse(status.can_apply)
 
-    def test_status_blocks_diverged_branch(self):
+    def test_status_hides_update_prompt_for_diverged_branch(self):
         overrides = {
             ("rev-parse", "HEAD"): (0, "bbb\n", ""),
             ("rev-parse", "@{u}"): (0, "ccc\n", ""),
@@ -328,7 +329,8 @@ class GitUpdateServiceTests(unittest.TestCase):
             with patch("app.subprocess.run", side_effect=self.git_run(overrides)):
                 status = service.get_status(force_fetch=True)
 
-        self.assertEqual(status.state, "blocked_diverged")
+        self.assertEqual(status.state, "local_diverged")
+        self.assertFalse(status.update_available)
         self.assertFalse(status.can_apply)
 
     def test_apply_runs_ff_only_pull_for_clean_behind_state(self):

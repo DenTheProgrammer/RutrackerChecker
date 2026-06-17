@@ -1875,7 +1875,7 @@ class GitUpdateService:
 
         if merge_base == upstream_sha:
             return self._status(
-                "blocked_ahead",
+                "local_ahead",
                 True,
                 False,
                 False,
@@ -1891,7 +1891,7 @@ class GitUpdateService:
             )
 
         return self._status(
-            "blocked_diverged",
+            "local_diverged",
             True,
             False,
             False,

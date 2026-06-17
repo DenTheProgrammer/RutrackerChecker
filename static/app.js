@@ -319,7 +319,7 @@ function renderUpdateStatus() {
   const update = state.update || {};
   if (!updateBadge || !updateText || !updateButton) return;
 
-  const quietStates = new Set(["", "up_to_date"]);
+  const quietStates = new Set(["", "up_to_date", "local_ahead", "local_diverged"]);
   const stateName = update.state || "";
   const shouldShow = !quietStates.has(stateName);
   updateBadge.hidden = !shouldShow;
