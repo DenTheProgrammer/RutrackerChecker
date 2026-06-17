@@ -441,6 +441,9 @@ async function saveMovie(event) {
     const item = id
       ? await api(`/api/items/${id}`, { method: "PATCH", body: JSON.stringify(data) })
       : await api("/api/items", { method: "POST", body: JSON.stringify(data) });
+    if (item.initial_check) {
+      rememberCheck(item.initial_check);
+    }
     closeMovieModal();
     await load();
     if (!data.poster_url) {

@@ -104,6 +104,9 @@ AUTO_SHUTDOWN_WHEN_IDLE = config("AUTO_SHUTDOWN_WHEN_IDLE", "1") != "0"
 AUTO_SHUTDOWN_GRACE_SECONDS = config_int("AUTO_SHUTDOWN_GRACE_SECONDS", 45)
 APP_HOST = config("APP_HOST", "127.0.0.1")
 APP_PORT = config_int("APP_PORT", 9876)
+INITIAL_ITEM_CHECK_ATTEMPTS = max(1, config_int("INITIAL_ITEM_CHECK_ATTEMPTS", 3))
+INITIAL_ITEM_CHECK_RETRY_SECONDS = max(0, config_int("INITIAL_ITEM_CHECK_RETRY_SECONDS", 3))
+RETRYABLE_HTTP_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 SETTING_ENV = {
     "rutracker_username": "RUTRACKER_USERNAME",
@@ -1184,7 +1187,7 @@ class RuTrackerClient:
                     return raw.decode(charset, errors="replace")
             except urllib.error.HTTPError as exc:
                 last_error = exc
-                if exc.code < 500:
+                if exc.code not in RETRYABLE_HTTP_STATUS_CODES:
                     raise
                 time.sleep(1 + attempt * 2)
             except (TimeoutError, socket.timeout, ConnectionResetError, urllib.error.URLError) as exc:
@@ -1322,6 +1325,46 @@ class CheckerService:
             "new_results": new_rows,
             "search_url": RuTrackerClient.search_url(item["query"]),
         }
+
+    def check_new_item_with_retries(
+        self,
+        item_id: int,
+        notify: bool = True,
+        attempts: int = INITIAL_ITEM_CHECK_ATTEMPTS,
+    ) -> dict[str, Any]:
+        last_error: Exception | None = None
+        used_attempts = 0
+        for attempt in range(max(1, attempts)):
+            used_attempts = attempt + 1
+            try:
+                summary = self.check_item(item_id, notify=notify)
+                summary["attempts"] = used_attempts
+                return summary
+            except Exception as exc:
+                last_error = exc
+                if not self.is_retryable_check_error(exc) or used_attempts >= attempts:
+                    break
+                time.sleep(INITIAL_ITEM_CHECK_RETRY_SECONDS * (attempt + 1))
+
+        item = self.db.get_item(item_id)
+        return {
+            "item": item,
+            "error": str(last_error) if last_error else "check failed",
+            "attempts": used_attempts or 1,
+            "new": 0,
+            "matched": 0,
+            "pending_new": self.db.count_new(item_id) if item else 0,
+            "search_url": RuTrackerClient.search_url(item["query"]) if item else "",
+        }
+
+    @staticmethod
+    def is_retryable_check_error(exc: Exception) -> bool:
+        if isinstance(exc, urllib.error.HTTPError):
+            return exc.code in RETRYABLE_HTTP_STATUS_CODES
+        return isinstance(
+            exc,
+            (TimeoutError, socket.timeout, ConnectionResetError, urllib.error.URLError),
+        )
 
     def check_all(self, notify: bool = True) -> dict[str, Any]:
         summaries = []
@@ -1628,7 +1671,12 @@ class RequestHandler(BaseHTTPRequestHandler):
             if self.path == "/api/items":
                 if not DB.has_rutracker_credentials():
                     raise ValueError("Введите логин и пароль RuTracker перед добавлением фильма")
-                self.send_json(DB.create_item(self.read_json()), 201)
+                item = DB.create_item(self.read_json())
+                item["initial_check"] = CHECKER.check_new_item_with_retries(
+                    int(item["id"]),
+                    notify=True,
+                )
+                self.send_json(item, 201)
                 return
 
             if self.path == "/api/check-all":

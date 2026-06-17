@@ -13,6 +13,7 @@ from unittest.mock import patch
 import app
 from check_once import build_notification
 from app import (
+    CheckerService,
     Database,
     RequestHandler,
     RuTrackerClient,
@@ -425,7 +426,21 @@ class DatabaseTests(unittest.TestCase):
     def test_create_item_api_requires_rutracker_credentials(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / "app.db")
-            with patch.object(app, "DB", db):
+            class FakeChecker:
+                def __init__(self) -> None:
+                    self.calls = []
+
+                def check_new_item_with_retries(self, item_id, notify=True):
+                    self.calls.append((item_id, notify))
+                    return {
+                        "item": db.get_item(item_id),
+                        "new": 0,
+                        "matched": 0,
+                        "pending_new": 0,
+                    }
+
+            fake_checker = FakeChecker()
+            with patch.object(app, "DB", db), patch.object(app, "CHECKER", fake_checker):
                 server = ThreadingHTTPServer(("127.0.0.1", 0), RequestHandler)
                 thread = threading.Thread(target=server.serve_forever, daemon=True)
                 thread.start()
@@ -453,6 +468,8 @@ class DatabaseTests(unittest.TestCase):
 
                     self.assertEqual(response.status, 201)
                     self.assertEqual(payload["query"], "Drama 2026")
+                    self.assertEqual(fake_checker.calls, [(payload["id"], True)])
+                    self.assertIn("initial_check", payload)
                 finally:
                     server.shutdown()
                     server.server_close()
@@ -549,6 +566,47 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(db.list_items()[0]["new_count"], 0)
             self.assertEqual(db.count_new(item["id"]), 0)
             self.assertEqual(len(db.list_results(item["id"])), 1)
+            db.close()
+
+    def test_initial_item_check_retries_transient_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            item = db.create_item({"title": "Drama", "query": "Drama 2026"})
+
+            class FlakyClient:
+                def __init__(self) -> None:
+                    self.calls = 0
+
+                def search(self, query):
+                    self.calls += 1
+                    if self.calls < 3:
+                        raise urllib.error.URLError("RuTracker is busy")
+                    return [
+                        SearchResult(
+                            topic_id="111",
+                            title="Drama 2026 WEB-DL 1080p",
+                            url="https://rutracker.org/forum/viewtopic.php?t=111",
+                            seeders=10,
+                            resolution="1080p",
+                            size_bytes=8 * 1024**3,
+                            size_label="8 GB",
+                        )
+                    ]
+
+            class FakeNotifier:
+                def send_new_results(self, item, rows):
+                    pass
+
+            client = FlakyClient()
+            service = CheckerService(db, client, FakeNotifier())
+            with patch.object(app.time, "sleep") as sleep:
+                summary = service.check_new_item_with_retries(item["id"], attempts=3)
+
+            self.assertEqual(client.calls, 3)
+            self.assertEqual(sleep.call_count, 2)
+            self.assertEqual(summary["attempts"], 3)
+            self.assertEqual(summary["new"], 1)
+            self.assertEqual(db.count_new(item["id"]), 1)
             db.close()
 
     def test_pending_results_that_fail_current_filter_are_cleared(self):
