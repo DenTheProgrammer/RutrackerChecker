@@ -162,7 +162,13 @@ function hasRecentMetadataAttempt(item) {
 }
 
 function needsPosterPolling() {
-  return (state.items || []).some((item) => !item.poster_url && !hasRecentMetadataAttempt(item));
+  return (state.items || []).some((item) => {
+    const needsPoster = !item.poster_url && !hasRecentMetadataAttempt(item);
+    const needsSearchSync = Boolean(
+      item.sync_search_from_imdb && item.imdb_url && !item.imdb_search_synced_at
+    );
+    return needsPoster || needsSearchSync;
+  });
 }
 
 function formatClock(value) {

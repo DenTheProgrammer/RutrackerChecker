@@ -620,7 +620,7 @@ button:disabled {
 .movie-card {
   display: grid;
   grid-template-rows: 1fr auto;
-  overflow: visible;
+  overflow: hidden;
   padding: 0;
   text-align: left;
 }
@@ -708,7 +708,7 @@ button:disabled {
 .poster {
   position: relative;
   aspect-ratio: 2 / 3;
-  overflow: visible;
+  overflow: hidden;
   border-radius: 24px 24px 0 0;
   background: linear-gradient(145deg, #1f2937, #0f172a 54%, #064e3b);
 }
@@ -755,8 +755,8 @@ button:disabled {
 
 .new-badge {
   position: absolute;
-  top: -17px;
-  right: -17px;
+  top: 12px;
+  right: 12px;
   z-index: 4;
   display: grid;
   place-items: center;

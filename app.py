@@ -810,15 +810,29 @@ def metadata_attempt_is_recent(value: str, now: dt.datetime, max_age_hours: int 
     return parsed is not None and now - parsed < dt.timedelta(hours=max_age_hours)
 
 
+def item_needs_metadata_refresh(item: dict[str, Any], now: dt.datetime) -> bool:
+    has_poster = bool(str(item.get("poster_url") or "").strip())
+    has_imdb = bool(str(item.get("imdb_url") or "").strip())
+    poster_attempt_recent = metadata_attempt_is_recent(
+        str(item.get("poster_updated_at") or ""),
+        now,
+    )
+    needs_poster = not has_poster and not poster_attempt_recent
+    needs_search_sync = (
+        bool(item.get("sync_search_from_imdb", 1))
+        and has_imdb
+        and not str(item.get("imdb_search_synced_at") or "").strip()
+    )
+    return needs_poster or needs_search_sync
+
+
 def refresh_missing_posters(db: "Database", limit: int = 20) -> int:
     now = dt.datetime.now(dt.timezone.utc)
     refreshed = 0
     for item in db.list_items():
         if refreshed >= limit:
             break
-        if str(item.get("poster_url") or "").strip():
-            continue
-        if metadata_attempt_is_recent(str(item.get("poster_updated_at") or ""), now):
+        if not item_needs_metadata_refresh(item, now):
             continue
         try:
             refresh_item_metadata(db, int(item["id"]))
@@ -862,6 +876,7 @@ class Database:
                 imdb_url TEXT NOT NULL DEFAULT '',
                 poster_url TEXT NOT NULL DEFAULT '',
                 poster_updated_at TEXT NOT NULL DEFAULT '',
+                imdb_search_synced_at TEXT NOT NULL DEFAULT '',
                 min_seeders INTEGER NOT NULL DEFAULT 5,
                 min_size_gb REAL NOT NULL DEFAULT 5,
                 require_1080p INTEGER NOT NULL DEFAULT 1,
@@ -900,6 +915,7 @@ class Database:
         self.ensure_column(connection, "items", "imdb_url", "TEXT NOT NULL DEFAULT ''")
         self.ensure_column(connection, "items", "poster_url", "TEXT NOT NULL DEFAULT ''")
         self.ensure_column(connection, "items", "poster_updated_at", "TEXT NOT NULL DEFAULT ''")
+        self.ensure_column(connection, "items", "imdb_search_synced_at", "TEXT NOT NULL DEFAULT ''")
         self.ensure_column(connection, "items", "min_size_gb", "REAL NOT NULL DEFAULT 5")
         self.ensure_column(connection, "items", "require_1080p", "INTEGER NOT NULL DEFAULT 1")
         self.ensure_column(connection, "items", "sync_search_from_imdb", "INTEGER NOT NULL DEFAULT 1")
@@ -1150,6 +1166,12 @@ class Database:
         should_sync_search = bool(item.get("sync_search_from_imdb", 1))
         title = search_text if search_text and should_sync_search else item["title"]
         query = search_text if search_text and should_sync_search else item["query"]
+        updated_at = dt.datetime.now(dt.timezone.utc).isoformat()
+        synced_at = (
+            updated_at
+            if search_text and should_sync_search
+            else str(item.get("imdb_search_synced_at") or "")
+        )
         self.conn().execute(
             """
             UPDATE items
@@ -1158,6 +1180,7 @@ class Database:
                 imdb_url = COALESCE(NULLIF(?, ''), imdb_url),
                 poster_url = COALESCE(NULLIF(?, ''), poster_url),
                 poster_updated_at = ?,
+                imdb_search_synced_at = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
             """,
@@ -1166,7 +1189,8 @@ class Database:
                 query,
                 imdb_url,
                 poster_url,
-                dt.datetime.now(dt.timezone.utc).isoformat(),
+                updated_at,
+                synced_at,
                 item_id,
             ),
         )

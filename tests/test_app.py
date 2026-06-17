@@ -455,6 +455,7 @@ class DatabaseTests(unittest.TestCase):
             self.assertIn("imdb_url", columns)
             self.assertIn("poster_url", columns)
             self.assertIn("poster_updated_at", columns)
+            self.assertIn("imdb_search_synced_at", columns)
             self.assertIn("sync_search_from_imdb", columns)
             db.close()
 
@@ -506,6 +507,7 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(payload["item"]["title"], "Game Night 2018 John Francis Daley")
             self.assertEqual(payload["item"]["query"], "Game Night 2018 John Francis Daley")
             self.assertEqual(payload["item"]["imdb_url"], "https://www.imdb.com/title/tt2704998/")
+            self.assertTrue(payload["item"]["imdb_search_synced_at"])
             db.close()
 
     def test_refresh_metadata_keeps_manual_search_when_sync_disabled(self):
@@ -532,6 +534,62 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(payload["item"]["title"], "Manual Game Night")
             self.assertEqual(payload["item"]["query"], "manual rutracker query")
             self.assertEqual(payload["item"]["sync_search_from_imdb"], 0)
+            self.assertEqual(payload["item"]["imdb_search_synced_at"], "")
+            db.close()
+
+    def test_refresh_missing_posters_syncs_existing_imdb_search_details(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            item = db.create_item(
+                {
+                    "title": "gamenight",
+                    "query": "gamenight",
+                    "imdb_url": "https://www.imdb.com/title/tt2704998/",
+                    "poster_url": "https://example.com/game-night.jpg",
+                }
+            )
+
+            with patch(
+                "app.fetch_movie_metadata",
+                return_value={
+                    "imdb_url": "https://www.imdb.com/title/tt2704998/",
+                    "poster_url": "https://example.com/game-night.jpg",
+                    "search_text": "Game Night 2018 John Francis Daley",
+                },
+            ) as fetch:
+                count = app.refresh_missing_posters(db)
+
+            updated = db.get_item(item["id"])
+            self.assertEqual(count, 1)
+            fetch.assert_called_once()
+            self.assertEqual(updated["title"], "Game Night 2018 John Francis Daley")
+            self.assertEqual(updated["query"], "Game Night 2018 John Francis Daley")
+            self.assertTrue(updated["imdb_search_synced_at"])
+            db.close()
+
+    def test_refresh_missing_posters_skips_already_synced_imdb_search_details(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            item = db.create_item(
+                {
+                    "title": "Game Night 2018 John Francis Daley",
+                    "query": "Game Night 2018 John Francis Daley",
+                    "imdb_url": "https://www.imdb.com/title/tt2704998/",
+                    "poster_url": "https://example.com/game-night.jpg",
+                }
+            )
+            db.update_item_metadata(
+                item["id"],
+                "https://www.imdb.com/title/tt2704998/",
+                "https://example.com/game-night.jpg",
+                "Game Night 2018 John Francis Daley",
+            )
+
+            with patch("app.fetch_movie_metadata") as fetch:
+                count = app.refresh_missing_posters(db)
+
+            self.assertEqual(count, 0)
+            fetch.assert_not_called()
             db.close()
 
     def test_refresh_metadata_keeps_item_usable_on_failure(self):
@@ -583,6 +641,40 @@ class DatabaseTests(unittest.TestCase):
             "https://m.media-amazon.com/images/M/poster.jpg",
             )
         self.assertEqual(metadata["search_text"], "Drama 2026 First Director")
+
+    def test_fetch_movie_metadata_builds_gamenight_search_with_first_director(self):
+        def fake_fetch_json(url):
+            if "query.wikidata.org" in url:
+                return {
+                    "results": {
+                        "bindings": [
+                            {
+                                "directorLabel": {"value": "John Francis Daley"},
+                            },
+                            {
+                                "directorLabel": {"value": "Jonathan Goldstein"},
+                            },
+                        ]
+                    }
+                }
+            return {
+                "d": [
+                    {
+                        "id": "tt2704998",
+                        "l": "Game Night",
+                        "y": 2018,
+                        "qid": "movie",
+                        "i": {"imageUrl": "https://m.media-amazon.com/images/M/game-night.jpg"},
+                    }
+                ]
+            }
+
+        with patch("app.fetch_json", side_effect=fake_fetch_json):
+            metadata = fetch_movie_metadata("gamenight")
+
+        self.assertEqual(metadata["imdb_url"], "https://www.imdb.com/title/tt2704998/")
+        self.assertEqual(metadata["poster_url"], "https://m.media-amazon.com/images/M/game-night.jpg")
+        self.assertEqual(metadata["search_text"], "Game Night 2018 John Francis Daley")
 
     def test_fetch_movie_metadata_tries_simplified_candidates(self):
         def fake_fetch_json(url):
