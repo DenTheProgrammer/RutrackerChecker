@@ -63,6 +63,8 @@ If you prefer Windows Task Scheduler instead, `install_task.ps1` and `uninstall_
 
 The app can check for new commits in its configured Git upstream and install them with `git pull --ff-only`. This requires Git to be installed and the app folder to be a Git working copy.
 
+When an update is detected, an update banner appears in the header. Click `Download update` to pull the new commits and restart the local server. A newly started app checks the upstream immediately; an already-running app may take longer to notice a commit that was just pushed.
+
 For updates without a GitHub login, `https://github.com/DenTheProgrammer/RutrackerChecker.git` must be public/readable. Users only need read access; they do not need push access. If the repository is private, the user must configure GitHub authentication for Git on their machine before the update button can fetch or pull.
 
 Updates are intentionally blocked when the working tree has uncommitted changes, the local branch has commits that are not in the upstream branch, or the branches diverged. Resolve that Git state manually, then use the update button again.
