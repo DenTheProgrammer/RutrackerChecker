@@ -458,6 +458,49 @@ input:focus {
   background: #fff;
 }
 
+.update-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  max-width: 420px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  padding: 6px 8px 6px 12px;
+  color: var(--muted);
+  background: var(--panel-soft);
+}
+
+.update-badge[hidden] {
+  display: none;
+}
+
+.update-badge.available {
+  border-color: color-mix(in srgb, var(--primary) 44%, var(--border));
+  color: var(--text);
+  background: var(--primary-soft);
+}
+
+.update-badge.blocked,
+.update-badge.error {
+  border-color: color-mix(in srgb, var(--new) 44%, var(--border));
+  color: var(--text);
+  background: var(--new-soft);
+}
+
+.update-badge span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-badge .ghost-button {
+  min-height: 30px;
+  padding: 5px 9px;
+  white-space: nowrap;
+}
+
 .primary-button,
 .ghost-button,
 .danger-button,
@@ -971,8 +1014,18 @@ button:disabled {
 
   .header-actions .primary-button,
   .header-actions .ghost-button,
-  .header-actions .header-switch {
+  .header-actions .header-switch,
+  .header-actions .update-badge {
     width: 100%;
+  }
+
+  .header-actions .update-badge {
+    grid-column: 1 / -1;
+    max-width: none;
+  }
+
+  .header-actions .update-badge .ghost-button {
+    width: auto;
   }
 
   .header-switch {

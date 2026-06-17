@@ -59,6 +59,14 @@ To remove the Startup entry and stop the loop:
 
 If you prefer Windows Task Scheduler instead, `install_task.ps1` and `uninstall_task.ps1` are included, but some Windows policies require elevated permissions for scheduled tasks.
 
+## Updates
+
+The app can check for new commits in its configured Git upstream and install them with `git pull --ff-only`. This requires Git to be installed and the app folder to be a Git working copy.
+
+For updates without a GitHub login, `https://github.com/DenTheProgrammer/RutrackerChecker.git` must be public/readable. Users only need read access; they do not need push access. If the repository is private, the user must configure GitHub authentication for Git on their machine before the update button can fetch or pull.
+
+Updates are intentionally blocked when the working tree has uncommitted changes, the local branch has commits that are not in the upstream branch, or the branches diverged. Resolve that Git state manually, then use the update button again.
+
 ## Configuration
 
 - `DEFAULT_MIN_SEEDERS`: default minimum active seeders for new items.

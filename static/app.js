@@ -26,8 +26,11 @@ const runtimeSummary = document.querySelector("#runtimeSummary");
 const nextCheckTime = document.querySelector("#nextCheckTime");
 const nextReminderTime = document.querySelector("#nextReminderTime");
 const lastCheckTime = document.querySelector("#lastCheckTime");
+const updateBadge = document.querySelector("#updateBadge");
+const updateText = document.querySelector("#updateText");
+const updateButton = document.querySelector("#updateButton");
 
-let state = { items: [], config: {}, runtime: {} };
+let state = { items: [], config: {}, runtime: {}, update: {} };
 let lastChecks = new Map();
 let serverCheckIds = new Set();
 let serverQueuedIds = new Set();
@@ -47,6 +50,7 @@ const POSTER_POLL_INTERVAL_MS = 3000;
 const POSTER_POLL_DURATION_MS = 60000;
 const CHECK_POLL_INTERVAL_MS = 2000;
 const CHECK_POLL_DURATION_MS = 120000;
+const UPDATE_POLL_INTERVAL_MS = 30 * 60 * 1000;
 const RECENT_METADATA_ATTEMPT_MS = 24 * 60 * 60 * 1000;
 const SECRET_PLACEHOLDER = "••••••••••••";
 
@@ -56,6 +60,7 @@ const sessionId = crypto.randomUUID
 
 const icons = {
   check: '<path d="M20 6 9 17l-5-5"/>',
+  download: '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>',
   edit: '<path d="m16 3 5 5L8 21H3v-5L16 3Z"/><path d="m14 5 5 5"/>',
   external: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>',
   image: '<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
@@ -310,6 +315,23 @@ function renderRuntime() {
     : "-";
 }
 
+function renderUpdateStatus() {
+  const update = state.update || {};
+  if (!updateBadge || !updateText || !updateButton) return;
+
+  const quietStates = new Set(["", "up_to_date"]);
+  const stateName = update.state || "";
+  const shouldShow = !quietStates.has(stateName);
+  updateBadge.hidden = !shouldShow;
+  updateBadge.classList.toggle("available", stateName === "update_available");
+  updateBadge.classList.toggle("blocked", stateName.startsWith("blocked_"));
+  updateBadge.classList.toggle("error", stateName === "error" || stateName === "git_missing" || stateName === "no_git_repo");
+
+  updateText.textContent = update.message || "Проверяем обновления...";
+  updateButton.hidden = !update.can_apply;
+  updateButton.disabled = !update.can_apply;
+}
+
 function renderCards() {
   cardGrid.innerHTML = "";
   shelfSummary.textContent = state.items.length
@@ -455,6 +477,7 @@ function cardButton(iconName, title, onClick, disabled = false, extraClass = "")
 function render() {
   applySettingsToForms();
   renderRuntime();
+  renderUpdateStatus();
   renderCheckAllButton();
   renderCards();
 }
@@ -614,12 +637,16 @@ function renderCheckAllButton() {
 }
 
 async function load() {
-  const [itemsPayload, runtimePayload] = await Promise.all([
+  const [itemsPayload, runtimePayload, updatePayload] = await Promise.all([
     api("/api/items"),
     api("/api/runtime"),
+    api("/api/update/status").catch((error) => ({
+      state: "error",
+      message: `Не удалось проверить обновления: ${error.message}`,
+    })),
   ]);
   syncCheckPayload(itemsPayload);
-  state = { ...itemsPayload, runtime: runtimePayload };
+  state = { ...itemsPayload, runtime: runtimePayload, update: updatePayload };
   render();
   startPosterPolling();
   startCheckPolling();
@@ -726,6 +753,62 @@ async function refreshRuntime() {
     runtimePanel.classList.add("stale");
     runtimeTitle.textContent = "Статус недоступен";
     runtimeSummary.textContent = error.message;
+  }
+}
+
+async function refreshUpdateStatus(force = false) {
+  try {
+    state.update = await api(`/api/update/status${force ? "?force=1" : ""}`);
+  } catch (error) {
+    state.update = {
+      state: "error",
+      message: `Не удалось проверить обновления: ${error.message}`,
+    };
+  }
+  renderUpdateStatus();
+}
+
+async function waitForRestartAndReload() {
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  const deadline = Date.now() + 90000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`/api/health?restart=${Date.now()}`, { cache: "no-store" });
+      if (response.ok) {
+        window.location.reload();
+        return;
+      }
+    } catch (error) {
+      // Server is expected to disappear briefly while the update restarts it.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  state.update = {
+    state: "error",
+    message: "Обновление установлено, но приложение не перезапустилось автоматически.",
+  };
+  renderUpdateStatus();
+}
+
+async function applyUpdate() {
+  setBusy(updateButton, true, "Обновляем...");
+  try {
+    const payload = await api("/api/update/apply", { method: "POST" });
+    state.update = {
+      ...(payload.status || {}),
+      state: "restarting",
+      message: payload.message || "Обновление установлено. Перезапускаем...",
+    };
+    renderUpdateStatus();
+    await waitForRestartAndReload();
+  } catch (error) {
+    state.update = {
+      state: "error",
+      message: `Обновление не установлено: ${error.message}`,
+    };
+    renderUpdateStatus();
+  } finally {
+    setBusy(updateButton, false);
   }
 }
 
@@ -860,6 +943,8 @@ checkAllButton.addEventListener("click", async () => {
   }
 });
 
+updateButton.addEventListener("click", applyUpdate);
+
 async function heartbeat() {
   try {
     await api("/api/heartbeat", {
@@ -876,6 +961,7 @@ hydrateIcons();
 heartbeat();
 setInterval(heartbeat, 10000);
 setInterval(refreshRuntime, 15000);
+setInterval(() => refreshUpdateStatus(false), UPDATE_POLL_INTERVAL_MS);
 
 load().catch((error) => {
   statusLine.textContent = error.message;

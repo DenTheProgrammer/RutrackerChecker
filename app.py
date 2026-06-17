@@ -13,12 +13,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import datetime as dt
+import base64
 from dataclasses import dataclass
 from html import unescape
 from http import HTTPStatus
 from http.cookiejar import CookieJar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import sys
 from typing import Any, Callable
 
 
@@ -112,6 +114,10 @@ INITIAL_ITEM_CHECK_ATTEMPTS = max(1, config_int("INITIAL_ITEM_CHECK_ATTEMPTS", 2
 INITIAL_ITEM_CHECK_RETRY_SECONDS = max(0, config_int("INITIAL_ITEM_CHECK_RETRY_SECONDS", 3))
 CHECK_ALL_MAX_WORKERS = max(1, config_int("CHECK_ALL_MAX_WORKERS", 3))
 RETRYABLE_HTTP_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+UPDATE_FETCH_THROTTLE_SECONDS = max(
+    60,
+    config_int("UPDATE_FETCH_THROTTLE_SECONDS", 6 * 60 * 60),
+)
 
 SETTING_ENV = {
     "rutracker_username": "RUTRACKER_USERNAME",
@@ -142,6 +148,14 @@ SETTING_DEFAULTS = {
 }
 
 SECRET_SETTINGS = {"rutracker_password", "telegram_bot_token"}
+
+
+def utc_now() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def iso_now() -> str:
+    return utc_now().isoformat()
 
 
 @dataclass(frozen=True)
@@ -1644,6 +1658,381 @@ def request_shutdown(reason: str = "requested") -> None:
     threading.Thread(target=stop, daemon=True).start()
 
 
+@dataclass
+class UpdateStatus:
+    state: str
+    supported: bool
+    update_available: bool
+    can_apply: bool
+    message: str
+    current_branch: str = ""
+    upstream: str = ""
+    local_sha: str = ""
+    upstream_sha: str = ""
+    ahead_count: int = 0
+    behind_count: int = 0
+    checked_at: str = ""
+    fetched_at: str = ""
+    error: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "state": self.state,
+            "supported": self.supported,
+            "update_available": self.update_available,
+            "can_apply": self.can_apply,
+            "message": self.message,
+            "current_branch": self.current_branch,
+            "upstream": self.upstream,
+            "local_sha": self.local_sha,
+            "upstream_sha": self.upstream_sha,
+            "ahead_count": self.ahead_count,
+            "behind_count": self.behind_count,
+            "checked_at": self.checked_at,
+            "fetched_at": self.fetched_at,
+            "error": self.error,
+        }
+
+
+class GitUpdateService:
+    def __init__(self, base_dir: Path = BASE_DIR) -> None:
+        self.base_dir = base_dir
+        self._lock = threading.Lock()
+        self._last_fetch_monotonic = 0.0
+        self._last_fetch_at = ""
+
+    def get_status(self, force_fetch: bool = False) -> UpdateStatus:
+        with self._lock:
+            return self._get_status_locked(force_fetch=force_fetch)
+
+    def apply_update(self) -> dict[str, Any]:
+        with self._lock:
+            status = self._get_status_locked(force_fetch=True)
+            if not status.can_apply:
+                raise ValueError(status.message)
+
+            pull = self._git(["pull", "--ff-only"], timeout=120)
+            if pull.returncode != 0:
+                raise RuntimeError("Git pull failed: " + self._git_output(pull))
+
+            updated_status = self._get_status_locked(force_fetch=False)
+            restart_started = self._schedule_restart()
+            message = "Обновление установлено. Приложение перезапускается."
+            if not restart_started:
+                message = "Обновление установлено. Перезапустите приложение вручную."
+            return {
+                "updated": True,
+                "restart_started": restart_started,
+                "message": message,
+                "status": updated_status.to_dict(),
+            }
+
+    def _get_status_locked(self, force_fetch: bool = False) -> UpdateStatus:
+        checked_at = iso_now()
+        git_dir = self.base_dir / ".git"
+        if not git_dir.exists():
+            return self._status(
+                "no_git_repo",
+                False,
+                False,
+                False,
+                "Автообновление недоступно: приложение запущено не из Git-репозитория.",
+                checked_at,
+            )
+
+        try:
+            version = self._git(["--version"], timeout=5)
+        except FileNotFoundError:
+            return self._status(
+                "git_missing",
+                False,
+                False,
+                False,
+                "Автообновление недоступно: Git не найден.",
+                checked_at,
+            )
+        if version.returncode != 0:
+            return self._status(
+                "git_missing",
+                False,
+                False,
+                False,
+                "Автообновление недоступно: Git не запускается.",
+                checked_at,
+                error=self._git_output(version),
+            )
+
+        branch = self._git_text(["branch", "--show-current"])
+        upstream_result = self._git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+        if upstream_result.returncode != 0:
+            return self._status(
+                "blocked_no_upstream",
+                True,
+                False,
+                False,
+                "Автообновление недоступно: у текущей ветки нет upstream.",
+                checked_at,
+                current_branch=branch,
+                error=self._git_output(upstream_result),
+            )
+        upstream = upstream_result.stdout.strip()
+
+        fetch_error = self._fetch_if_due(force_fetch)
+        if fetch_error:
+            return self._status(
+                "error",
+                True,
+                False,
+                False,
+                "Не удалось проверить обновления: " + fetch_error,
+                checked_at,
+                current_branch=branch,
+                upstream=upstream,
+                fetched_at=self._last_fetch_at,
+                error=fetch_error,
+            )
+
+        dirty = self._git(["status", "--porcelain"])
+        if dirty.returncode != 0:
+            return self._status(
+                "error",
+                True,
+                False,
+                False,
+                "Не удалось проверить рабочую копию: " + self._git_output(dirty),
+                checked_at,
+                current_branch=branch,
+                upstream=upstream,
+                fetched_at=self._last_fetch_at,
+                error=self._git_output(dirty),
+            )
+        if dirty.stdout.strip():
+            return self._status(
+                "blocked_dirty",
+                True,
+                False,
+                False,
+                "Обновление заблокировано: есть незакоммиченные изменения.",
+                checked_at,
+                current_branch=branch,
+                upstream=upstream,
+                fetched_at=self._last_fetch_at,
+            )
+
+        local_sha = self._git_text(["rev-parse", "HEAD"])
+        upstream_sha = self._git_text(["rev-parse", "@{u}"])
+        merge_base = self._git_text(["merge-base", "HEAD", "@{u}"])
+        ahead_count = self._git_count(["rev-list", "--count", "@{u}..HEAD"])
+        behind_count = self._git_count(["rev-list", "--count", "HEAD..@{u}"])
+
+        if not local_sha or not upstream_sha or not merge_base:
+            return self._status(
+                "error",
+                True,
+                False,
+                False,
+                "Не удалось сравнить локальную и удаленную версии.",
+                checked_at,
+                current_branch=branch,
+                upstream=upstream,
+                fetched_at=self._last_fetch_at,
+            )
+
+        if local_sha == upstream_sha:
+            return self._status(
+                "up_to_date",
+                True,
+                False,
+                False,
+                "Установлена последняя версия.",
+                checked_at,
+                current_branch=branch,
+                upstream=upstream,
+                local_sha=local_sha,
+                upstream_sha=upstream_sha,
+                fetched_at=self._last_fetch_at,
+            )
+
+        if merge_base == local_sha:
+            return self._status(
+                "update_available",
+                True,
+                True,
+                True,
+                f"Доступно обновление: {behind_count} коммит(ов).",
+                checked_at,
+                current_branch=branch,
+                upstream=upstream,
+                local_sha=local_sha,
+                upstream_sha=upstream_sha,
+                ahead_count=ahead_count,
+                behind_count=behind_count,
+                fetched_at=self._last_fetch_at,
+            )
+
+        if merge_base == upstream_sha:
+            return self._status(
+                "blocked_ahead",
+                True,
+                False,
+                False,
+                "Обновление заблокировано: локальная ветка содержит свои коммиты.",
+                checked_at,
+                current_branch=branch,
+                upstream=upstream,
+                local_sha=local_sha,
+                upstream_sha=upstream_sha,
+                ahead_count=ahead_count,
+                behind_count=behind_count,
+                fetched_at=self._last_fetch_at,
+            )
+
+        return self._status(
+            "blocked_diverged",
+            True,
+            False,
+            False,
+            "Обновление заблокировано: локальная и удаленная ветки разошлись.",
+            checked_at,
+            current_branch=branch,
+            upstream=upstream,
+            local_sha=local_sha,
+            upstream_sha=upstream_sha,
+            ahead_count=ahead_count,
+            behind_count=behind_count,
+            fetched_at=self._last_fetch_at,
+        )
+
+    def _fetch_if_due(self, force_fetch: bool) -> str:
+        now = time.monotonic()
+        if (
+            not force_fetch
+            and self._last_fetch_monotonic
+            and now - self._last_fetch_monotonic < UPDATE_FETCH_THROTTLE_SECONDS
+        ):
+            return ""
+        result = self._git(["fetch", "--quiet"], timeout=60)
+        if result.returncode != 0:
+            return self._git_output(result)
+        self._last_fetch_monotonic = now
+        self._last_fetch_at = iso_now()
+        return ""
+
+    def _schedule_restart(self) -> bool:
+        try:
+            root = str(self.base_dir)
+            python = sys.executable
+            script = f"""
+$ErrorActionPreference = 'SilentlyContinue'
+$Root = {self._ps_single(root)}
+$Python = {self._ps_single(python)}
+$HostName = {self._ps_single(APP_HOST)}
+$Port = {APP_PORT}
+Start-Sleep -Milliseconds 800
+for ($i = 0; $i -lt 40; $i++) {{
+    $Client = New-Object Net.Sockets.TcpClient
+    try {{
+        $Async = $Client.BeginConnect($HostName, $Port, $null, $null)
+        if ($Async.AsyncWaitHandle.WaitOne(250, $false)) {{
+            $Client.EndConnect($Async)
+            $Client.Close()
+            Start-Sleep -Milliseconds 500
+            continue
+        }}
+    }} catch {{
+    }} finally {{
+        if ($Client) {{ $Client.Close() }}
+    }}
+    break
+}}
+$Exe = Join-Path $Root 'RutrackerChecker.exe'
+if (Test-Path $Exe) {{
+    Start-Process -FilePath $Exe -WorkingDirectory $Root
+    exit 0
+}}
+$App = Join-Path $Root 'app.py'
+Start-Process -FilePath $Python -ArgumentList "`"$App`"" -WorkingDirectory $Root -WindowStyle Hidden
+"""
+            encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+            subprocess.Popen(
+                [
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-WindowStyle",
+                    "Hidden",
+                    "-EncodedCommand",
+                    encoded,
+                ],
+                cwd=self.base_dir,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            return True
+        except OSError:
+            return False
+
+    def _git(self, args: list[str], timeout: int = 15) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        return subprocess.run(
+            ["git", *args],
+            cwd=self.base_dir,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            env=env,
+        )
+
+    def _git_text(self, args: list[str]) -> str:
+        result = self._git(args)
+        if result.returncode != 0:
+            return ""
+        return result.stdout.strip()
+
+    def _git_count(self, args: list[str]) -> int:
+        value = self._git_text(args)
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+
+    @staticmethod
+    def _git_output(result: subprocess.CompletedProcess[str]) -> str:
+        return (result.stderr or result.stdout or "unknown git error").strip()
+
+    @staticmethod
+    def _ps_single(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
+
+    @staticmethod
+    def _status(
+        state: str,
+        supported: bool,
+        update_available: bool,
+        can_apply: bool,
+        message: str,
+        checked_at: str,
+        **kwargs: Any,
+    ) -> UpdateStatus:
+        return UpdateStatus(
+            state=state,
+            supported=supported,
+            update_available=update_available,
+            can_apply=can_apply,
+            message=message,
+            checked_at=checked_at,
+            **kwargs,
+        )
+
+
+UPDATE_SERVICE = GitUpdateService()
+
+
 def start_metadata_backfill() -> None:
     global METADATA_BACKFILL_RUNNING
     with METADATA_BACKFILL_LOCK:
@@ -1871,7 +2260,9 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         try:
-            request_path = urllib.parse.urlparse(self.path).path
+            parsed_url = urllib.parse.urlparse(self.path)
+            request_path = parsed_url.path
+            query = urllib.parse.parse_qs(parsed_url.query)
 
             if request_path == "/":
                 start_metadata_backfill()
@@ -1907,6 +2298,11 @@ class RequestHandler(BaseHTTPRequestHandler):
 
             if request_path == "/api/runtime":
                 self.send_json(read_runtime_status())
+                return
+
+            if request_path == "/api/update/status":
+                force = (query.get("force") or ["0"])[0] == "1"
+                self.send_json(UPDATE_SERVICE.get_status(force_fetch=force).to_dict())
                 return
 
             if request_path == "/api/health":
@@ -1962,7 +2358,9 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         try:
-            if self.path == "/api/items":
+            request_path = urllib.parse.urlparse(self.path).path
+
+            if request_path == "/api/items":
                 if not DB.has_rutracker_credentials():
                     raise ValueError("Введите логин и пароль RuTracker перед добавлением фильма")
                 item = DB.create_item(self.read_json())
@@ -1970,7 +2368,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_json(item, 201)
                 return
 
-            if self.path == "/api/check-all":
+            if request_path == "/api/check-all":
                 started = start_background_check_all()
                 self.send_json(
                     {
@@ -1984,7 +2382,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 )
                 return
 
-            if self.path == "/api/heartbeat":
+            if request_path == "/api/heartbeat":
                 payload = self.read_json()
                 session_id = str(payload.get("session_id") or "").strip()
                 if not session_id:
@@ -1992,22 +2390,28 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_json({"active_ui_sessions": UI_SESSIONS.heartbeat(session_id)})
                 return
 
-            if self.path == "/api/shutdown":
+            if request_path == "/api/update/apply":
+                payload = UPDATE_SERVICE.apply_update()
+                self.send_json(payload)
+                request_shutdown("update applied")
+                return
+
+            if request_path == "/api/shutdown":
                 self.send_json({"shutdown": True})
                 request_shutdown("ui requested")
                 return
 
-            check_match = re.match(r"^/api/items/(\d+)/check$", self.path)
+            check_match = re.match(r"^/api/items/(\d+)/check$", request_path)
             if check_match:
                 self.send_json(CHECKER.check_item_with_retries(int(check_match.group(1)), notify=True))
                 return
 
-            metadata_match = re.match(r"^/api/items/(\d+)/refresh-metadata$", self.path)
+            metadata_match = re.match(r"^/api/items/(\d+)/refresh-metadata$", request_path)
             if metadata_match:
                 self.send_json(refresh_item_metadata(DB, int(metadata_match.group(1))))
                 return
 
-            reset_match = re.match(r"^/api/items/(\d+)/reset-new$", self.path)
+            reset_match = re.match(r"^/api/items/(\d+)/reset-new$", request_path)
             if reset_match:
                 count = DB.reset_new(int(reset_match.group(1)))
                 self.send_json({"reset": count})
@@ -2066,6 +2470,7 @@ def scheduler_loop() -> None:
             continue
         try:
             CHECKER.check_all(notify=True)
+            UPDATE_SERVICE.get_status(force_fetch=False)
         except Exception as exc:
             print(f"Scheduled check failed: {exc}")
         next_run = time.monotonic() + interval_minutes * 60

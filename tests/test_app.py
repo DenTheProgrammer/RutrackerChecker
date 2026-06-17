@@ -1,4 +1,5 @@
 import json
+import subprocess
 import tempfile
 import threading
 import time
@@ -213,6 +214,163 @@ class NotificationTests(unittest.TestCase):
         }
 
         self.assertIsNone(build_notification(record))
+
+
+class GitUpdateServiceTests(unittest.TestCase):
+    def make_service(self, tmp: str) -> app.GitUpdateService:
+        root = Path(tmp)
+        (root / ".git").mkdir()
+        return app.GitUpdateService(root)
+
+    def git_run(self, overrides=None, missing_git: bool = False):
+        mapping = {
+            ("--version",): (0, "git version 2.45.0\n", ""),
+            ("branch", "--show-current"): (0, "master\n", ""),
+            ("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"): (0, "origin/master\n", ""),
+            ("fetch", "--quiet"): (0, "", ""),
+            ("status", "--porcelain"): (0, "", ""),
+            ("rev-parse", "HEAD"): (0, "aaa\n", ""),
+            ("rev-parse", "@{u}"): (0, "aaa\n", ""),
+            ("merge-base", "HEAD", "@{u}"): (0, "aaa\n", ""),
+            ("rev-list", "--count", "@{u}..HEAD"): (0, "0\n", ""),
+            ("rev-list", "--count", "HEAD..@{u}"): (0, "0\n", ""),
+        }
+        if overrides:
+            mapping.update(overrides)
+
+        def fake_run(command, **kwargs):
+            args = tuple(command[1:])
+            if missing_git and args == ("--version",):
+                raise FileNotFoundError("git")
+            code, stdout, stderr = mapping.get(args, (1, "", f"unexpected git command: {args}"))
+            return subprocess.CompletedProcess(command, code, stdout, stderr)
+
+        return fake_run
+
+    def test_status_reports_no_git_repo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = app.GitUpdateService(Path(tmp))
+
+            status = service.get_status(force_fetch=True)
+
+        self.assertEqual(status.state, "no_git_repo")
+        self.assertFalse(status.supported)
+
+    def test_status_reports_missing_git(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = self.make_service(tmp)
+            with patch("app.subprocess.run", side_effect=self.git_run(missing_git=True)):
+                status = service.get_status(force_fetch=True)
+
+        self.assertEqual(status.state, "git_missing")
+        self.assertFalse(status.supported)
+
+    def test_status_reports_up_to_date(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = self.make_service(tmp)
+            with patch("app.subprocess.run", side_effect=self.git_run()):
+                status = service.get_status(force_fetch=True)
+
+        self.assertEqual(status.state, "up_to_date")
+        self.assertFalse(status.update_available)
+
+    def test_status_reports_update_available_when_behind(self):
+        overrides = {
+            ("rev-parse", "@{u}"): (0, "bbb\n", ""),
+            ("rev-list", "--count", "HEAD..@{u}"): (0, "2\n", ""),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            service = self.make_service(tmp)
+            with patch("app.subprocess.run", side_effect=self.git_run(overrides)):
+                status = service.get_status(force_fetch=True)
+
+        self.assertEqual(status.state, "update_available")
+        self.assertTrue(status.can_apply)
+        self.assertEqual(status.behind_count, 2)
+
+    def test_status_blocks_dirty_tree(self):
+        overrides = {
+            ("status", "--porcelain"): (0, " M app.py\n", ""),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            service = self.make_service(tmp)
+            with patch("app.subprocess.run", side_effect=self.git_run(overrides)):
+                status = service.get_status(force_fetch=True)
+
+        self.assertEqual(status.state, "blocked_dirty")
+        self.assertFalse(status.can_apply)
+
+    def test_status_blocks_ahead_branch(self):
+        overrides = {
+            ("rev-parse", "HEAD"): (0, "bbb\n", ""),
+            ("merge-base", "HEAD", "@{u}"): (0, "aaa\n", ""),
+            ("rev-list", "--count", "@{u}..HEAD"): (0, "1\n", ""),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            service = self.make_service(tmp)
+            with patch("app.subprocess.run", side_effect=self.git_run(overrides)):
+                status = service.get_status(force_fetch=True)
+
+        self.assertEqual(status.state, "blocked_ahead")
+        self.assertFalse(status.can_apply)
+
+    def test_status_blocks_diverged_branch(self):
+        overrides = {
+            ("rev-parse", "HEAD"): (0, "bbb\n", ""),
+            ("rev-parse", "@{u}"): (0, "ccc\n", ""),
+            ("merge-base", "HEAD", "@{u}"): (0, "aaa\n", ""),
+            ("rev-list", "--count", "@{u}..HEAD"): (0, "1\n", ""),
+            ("rev-list", "--count", "HEAD..@{u}"): (0, "1\n", ""),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            service = self.make_service(tmp)
+            with patch("app.subprocess.run", side_effect=self.git_run(overrides)):
+                status = service.get_status(force_fetch=True)
+
+        self.assertEqual(status.state, "blocked_diverged")
+        self.assertFalse(status.can_apply)
+
+    def test_apply_runs_ff_only_pull_for_clean_behind_state(self):
+        overrides = {
+            ("rev-parse", "@{u}"): (0, "bbb\n", ""),
+            ("rev-list", "--count", "HEAD..@{u}"): (0, "1\n", ""),
+            ("pull", "--ff-only"): (0, "updated\n", ""),
+        }
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append(tuple(command[1:]))
+            return self.git_run(overrides)(command, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            service = self.make_service(tmp)
+            with patch("app.subprocess.run", side_effect=fake_run), patch.object(
+                service,
+                "_schedule_restart",
+                return_value=True,
+            ):
+                payload = service.apply_update()
+
+        self.assertTrue(payload["updated"])
+        self.assertIn(("pull", "--ff-only"), calls)
+
+    def test_apply_refuses_blocked_state_without_pull(self):
+        overrides = {
+            ("status", "--porcelain"): (0, " M app.py\n", ""),
+        }
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append(tuple(command[1:]))
+            return self.git_run(overrides)(command, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            service = self.make_service(tmp)
+            with patch("app.subprocess.run", side_effect=fake_run):
+                with self.assertRaises(ValueError):
+                    service.apply_update()
+
+        self.assertNotIn(("pull", "--ff-only"), calls)
 
 
 class DatabaseTests(unittest.TestCase):
@@ -583,6 +741,109 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(payload["checking_item_ids"], [7])
             self.assertEqual(payload["queued_item_ids"], [8])
             start_check_all.assert_called_once()
+
+    def test_update_status_api_returns_service_payload(self):
+        class FakeUpdateService:
+            def get_status(self, force_fetch=False):
+                self.force_fetch = force_fetch
+                return app.UpdateStatus(
+                    state="update_available",
+                    supported=True,
+                    update_available=True,
+                    can_apply=True,
+                    message="available",
+                    checked_at="2026-06-17T00:00:00+00:00",
+                    behind_count=2,
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            fake_service = FakeUpdateService()
+            with patch.object(app, "DB", db), patch.object(app, "UPDATE_SERVICE", fake_service):
+                server = ThreadingHTTPServer(("127.0.0.1", 0), RequestHandler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    with urllib.request.urlopen(
+                        f"http://127.0.0.1:{server.server_port}/api/update/status?force=1",
+                        timeout=5,
+                    ) as response:
+                        payload = json.loads(response.read().decode("utf-8"))
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    db.close()
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(fake_service.force_fetch)
+        self.assertEqual(payload["state"], "update_available")
+        self.assertTrue(payload["can_apply"])
+        self.assertEqual(payload["behind_count"], 2)
+
+    def test_update_apply_api_returns_bad_request_for_blocked_state(self):
+        class FakeUpdateService:
+            def apply_update(self):
+                raise ValueError("blocked")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            with patch.object(app, "DB", db), patch.object(app, "UPDATE_SERVICE", FakeUpdateService()):
+                server = ThreadingHTTPServer(("127.0.0.1", 0), RequestHandler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_port}/api/update/apply",
+                    method="POST",
+                )
+
+                try:
+                    with self.assertRaises(urllib.error.HTTPError) as context:
+                        urllib.request.urlopen(request, timeout=5)
+                    payload = json.loads(context.exception.read().decode("utf-8"))
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    db.close()
+
+        self.assertEqual(context.exception.code, 400)
+        self.assertEqual(payload["error"], "blocked")
+
+    def test_update_apply_api_schedules_shutdown_after_success(self):
+        class FakeUpdateService:
+            def apply_update(self):
+                return {
+                    "updated": True,
+                    "restart_started": True,
+                    "message": "updated",
+                    "status": {"state": "up_to_date"},
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            with patch.object(app, "DB", db), patch.object(
+                app,
+                "UPDATE_SERVICE",
+                FakeUpdateService(),
+            ), patch("app.request_shutdown") as shutdown:
+                server = ThreadingHTTPServer(("127.0.0.1", 0), RequestHandler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_port}/api/update/apply",
+                    method="POST",
+                )
+
+                try:
+                    with urllib.request.urlopen(request, timeout=5) as response:
+                        payload = json.loads(response.read().decode("utf-8"))
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    db.close()
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(payload["updated"])
+        shutdown.assert_called_once_with("update applied")
 
     def test_app_icon_assets_are_served(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 import check_once
-from app import DB, DEFAULT_CHECK_INTERVAL_MINUTES
+from app import DB, DEFAULT_CHECK_INTERVAL_MINUTES, UPDATE_SERVICE
 
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -102,6 +102,13 @@ def run_check_with_heartbeat() -> None:
         raise error
 
 
+def refresh_update_status() -> None:
+    try:
+        UPDATE_SERVICE.get_status(force_fetch=False)
+    except Exception as exc:
+        print(f"Update check failed: {exc}")
+
+
 def main() -> int:
     while True:
         if not background_enabled():
@@ -127,6 +134,7 @@ def main() -> int:
         try:
             write_runtime_status(status="checking", next_check_at=None)
             run_check_with_heartbeat()
+            refresh_update_status()
             next_check_at = utc_now() + dt.timedelta(seconds=interval_seconds)
             write_runtime_status(
                 status="waiting",
