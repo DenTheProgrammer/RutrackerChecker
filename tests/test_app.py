@@ -99,21 +99,21 @@ class ParserTests(unittest.TestCase):
     def test_quotes_cyrillic_query_for_rutracker(self):
         self.assertEqual(quote_rutracker_query("Драма 2025"), "%C4%F0%E0%EC%E0%202025")
 
-    def test_search_url_can_include_movie_forum(self):
+    def test_search_url_sorts_by_seeders_descending(self):
         self.assertEqual(
             RuTrackerClient.search_url("Drama 2025"),
-            "https://rutracker.org/forum/tracker.php?nm=Drama%202025",
+            "https://rutracker.org/forum/tracker.php?nm=Drama%202025&o=10&s=2",
         )
 
-    def test_parses_next_page_url(self):
+    def test_parses_next_page_url_with_seed_sort(self):
         html = '<a href="tracker.php?nm=Iron%20Man%202008&amp;start=50">След.</a>'
 
         self.assertEqual(
             parse_next_page_url(
                 html,
-                "https://rutracker.org/forum/tracker.php?nm=Iron%20Man%202008",
+                "https://rutracker.org/forum/tracker.php?nm=Iron%20Man%202008&o=10&s=2",
             ),
-            "https://rutracker.org/forum/tracker.php?nm=Iron%20Man%202008&start=50",
+            "https://rutracker.org/forum/tracker.php?nm=Iron%20Man%202008&start=50&o=10&s=2",
         )
 
     def test_detects_common_1080_and_better_labels(self):

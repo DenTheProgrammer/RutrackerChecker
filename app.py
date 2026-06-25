@@ -34,6 +34,8 @@ INSTALL_STARTUP_SCRIPT_PATH = BASE_DIR / "install_startup.ps1"
 START_BACKGROUND_TARGET_PATH = BASE_DIR / "start_background.vbs"
 STARTUP_SHORTCUT_NAME = "RutrackerChecker Background.lnk"
 RUTRACKER_BASE_URL = "https://rutracker.org/forum"
+RUTRACKER_SORT_SEEDERS = "10"
+RUTRACKER_SORT_DESCENDING = "2"
 IMDB_BASE_URL = "https://www.imdb.com"
 IMDB_SUGGESTION_BASE_URL = "https://v3.sg.media-imdb.com/suggestion"
 WIKIDATA_API_URL = "https://www.wikidata.org/w/api.php"
@@ -370,12 +372,36 @@ def parse_next_page_url(html: str, current_url: str) -> str | None:
         href = unescape(href)
         if "tracker.php" not in href:
             continue
-        return urllib.parse.urljoin(current_url, href)
+        return with_rutracker_seed_sort(urllib.parse.urljoin(current_url, href))
     return None
 
 
 def quote_rutracker_query(query: str) -> str:
     return urllib.parse.quote_from_bytes(query.encode("cp1251", errors="ignore"))
+
+
+def with_rutracker_seed_sort(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    query_parts = [
+        part
+        for part in parsed.query.split("&")
+        if part and part.split("=", 1)[0] not in {"o", "s"}
+    ]
+    query_parts.extend(
+        [
+            f"o={RUTRACKER_SORT_SEEDERS}",
+            f"s={RUTRACKER_SORT_DESCENDING}",
+        ]
+    )
+    return urllib.parse.urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, "&".join(query_parts), parsed.fragment)
+    )
+
+
+def build_rutracker_search_url(query: str) -> str:
+    return with_rutracker_seed_sort(
+        f"{RUTRACKER_BASE_URL}/tracker.php?nm={quote_rutracker_query(query)}"
+    )
 
 
 def filter_results(
@@ -1587,7 +1613,7 @@ class RuTrackerClient:
         return self.search_one(query)
 
     def search_one(self, query: str) -> list[SearchResult]:
-        url = f"{RUTRACKER_BASE_URL}/tracker.php?nm={quote_rutracker_query(query)}"
+        url = build_rutracker_search_url(query)
         max_pages = self.db.get_setting_int("max_search_pages", MAX_SEARCH_PAGES)
         all_results: dict[str, SearchResult] = {}
         seen_urls: set[str] = set()
@@ -1618,7 +1644,7 @@ class RuTrackerClient:
 
     @staticmethod
     def search_url(query: str) -> str:
-        return f"{RUTRACKER_BASE_URL}/tracker.php?nm={quote_rutracker_query(query)}"
+        return build_rutracker_search_url(query)
 
 
 class TelegramNotifier:
