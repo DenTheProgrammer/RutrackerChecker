@@ -76,6 +76,7 @@ const UPDATE_POLL_INTERVAL_MS = 30 * 60 * 1000;
 const RECENT_METADATA_ATTEMPT_MS = 24 * 60 * 60 * 1000;
 const SECRET_PLACEHOLDER = "••••••••••••";
 const DUPLICATE_DECISION_PREFIX = "rutrackerDuplicateDecision:v1:";
+const RUTRACKER_SEED_SORT_PARAMS = ["o=10", "s=2"];
 
 const sessionId = crypto.randomUUID
   ? crypto.randomUUID()
@@ -108,6 +109,17 @@ function hydrateIcons(root = document) {
   root.querySelectorAll("[data-icon]").forEach((node) => {
     node.innerHTML = icon(node.dataset.icon);
   });
+}
+
+function withRutrackerSeedSort(url) {
+  const [withoutHash, hash = ""] = String(url || "").split("#", 2);
+  const [base, query = ""] = withoutHash.split("?", 2);
+  const queryParts = query
+    .split("&")
+    .filter(Boolean)
+    .filter((part) => !["o", "s"].includes(part.split("=", 1)[0]));
+  queryParts.push(...RUTRACKER_SEED_SORT_PARAMS);
+  return `${base}?${queryParts.join("&")}${hash ? `#${hash}` : ""}`;
 }
 
 async function api(path, options = {}) {
@@ -448,7 +460,7 @@ function createMovieCard(item) {
   main.className = "card-main";
   main.title = "Открыть поиск RuTracker";
   main.addEventListener("click", () => {
-    window.open(item.search_url, "_blank", "noreferrer");
+    window.open(withRutrackerSeedSort(item.search_url), "_blank", "noreferrer");
   });
 
   const poster = document.createElement("div");
