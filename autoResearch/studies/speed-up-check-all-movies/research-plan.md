@@ -9,6 +9,7 @@ Draft, not frozen:
 - Direction: lower is better.
 - Proposed eval command: `python scripts/measure_check_all.py --repeats 3 --max-errors 0`.
 - Parsed metric: `mean_wall_clock_seconds`.
+- Baseline and candidate rows must be identical units: one eval command invocation. The command itself performs the same 3 internal check-all repeats for both baseline and candidates.
 - Guardrail: candidate run must not increase item-level check errors compared with the locked baseline.
 - Guardrail: candidate run must preserve result correctness: same enabled item set, same RuTracker search query per item, same filtering rules, and no skipped pages beyond the frozen `max_search_pages`.
 - Minimum meaningful improvement: any lower mean wall-clock time, with no error regression.
@@ -37,6 +38,7 @@ Not a locked baseline:
 - Current default worker limit in code: `CHECK_ALL_MAX_WORKERS=3`, but this is arbitrary and may be varied by future candidates if the frozen contract allows it.
 - Exploratory measurements taken before this study was defined are only orientation data and must not be compared as the study baseline.
 - Baseline must be recorded through the frozen AutoResearch eval command after requirements, metric, parser, locked paths, and allowed paths are confirmed.
+- Current draft uses `baseline_repeats=1` so baseline and loop candidate evaluations are structurally identical.
 
 ## Experiment Ideas
 Do not execute until the study is explicitly started:

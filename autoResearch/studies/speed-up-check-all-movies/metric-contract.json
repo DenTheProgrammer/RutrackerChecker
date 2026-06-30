@@ -8,10 +8,10 @@
     "requires_context_policy_for_blind": true,
     "requires_worker_id_for_subagent_candidates": true
   },
-  "contract_hash": "ac5fc7153ad3a08a",
+  "contract_hash": "637b202dcec813ac",
   "created_at": "2026-06-30T02:58:22Z",
   "evaluation": {
-    "baseline_repeats": 5,
+    "baseline_repeats": 1,
     "command": "python scripts/measure_check_all.py --repeats 3 --max-errors 0",
     "cwd": "project-root",
     "parser_group": 1,
