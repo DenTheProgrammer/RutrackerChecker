@@ -1,8 +1,10 @@
 {
-  "incumbent_commit": null,
-  "incumbent_label": null,
-  "incumbent_metric": null,
+  "direction": "lower",
+  "incumbent_commit": "346958f",
+  "incumbent_label": "baseline",
+  "incumbent_metric": 11.676712,
+  "metric_name": "mean_wall_clock_seconds",
   "schema_version": 1,
   "study": "speed-up-check-all-movies",
-  "updated_at": "2026-06-30T02:58:22Z"
+  "updated_at": "2026-06-30T03:12:00Z"
 }
