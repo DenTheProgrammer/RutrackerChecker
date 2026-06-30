@@ -14,6 +14,10 @@
 
 ![Progress](progress.svg)
 
+## Next Action
+
+Review and merge `autoresearch/speed-up-check-all-movies-20260630-resume` at incumbent commit `8fa5d29` into the base branch if the changed files and tests look right.
+
 ## Hypotheses
 
 | cycle | family | hypothesis | metric | suggested | decision |
