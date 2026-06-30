@@ -16,7 +16,7 @@
 
 ## Next Action
 
-Review and merge `autoresearch/speed-up-check-all-movies-20260630-resume` at incumbent commit `8fa5d29` into the base branch if the changed files and tests look right.
+Review the kept improvement at incumbent commit `8fa5d29`; merge is unnecessary if this is already the base branch.
 
 ## Hypotheses
 
