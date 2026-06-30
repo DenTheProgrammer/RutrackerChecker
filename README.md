@@ -81,7 +81,7 @@ Updates are intentionally blocked when the working tree has uncommitted changes,
 - `RUTRACKER_RETRY_BASE_SECONDS`: base delay between RuTracker request retries; default is `0`.
 - `INITIAL_ITEM_CHECK_ATTEMPTS`: attempts for the first background check after adding a new item; default is `2`.
 - `INITIAL_ITEM_CHECK_RETRY_SECONDS`: delay between those new-item attempts; default is `3`.
-- `CHECK_ALL_MAX_WORKERS`: simultaneous RuTracker requests for the manual "check all" action; default is `3`. All enabled cards enter the checking state immediately, but requests are limited to this worker count.
+- `CHECK_ALL_MAX_WORKERS`: simultaneous RuTracker requests for the manual "check all" action; default is `8`. All enabled cards enter the checking state immediately, but requests are limited to this worker count.
 - `AUTO_SHUTDOWN_WHEN_IDLE`: `1` stops the server after all UI tabs are closed.
 - `AUTO_SHUTDOWN_GRACE_SECONDS`: idle close delay; default is `45`.
 - `APP_HOST` and `APP_PORT`: local server address.
