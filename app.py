@@ -1785,36 +1785,38 @@ class CheckerService:
             work_queue.put(item)
 
         def check_next() -> None:
-            while True:
-                try:
-                    item = work_queue.get_nowait()
-                except queue.Empty:
-                    return
+            try:
+                while True:
+                    try:
+                        item = work_queue.get_nowait()
+                    except queue.Empty:
+                        return
 
-                item_id = int(item["id"])
-                if before_item:
-                    before_item(item_id)
-                try:
-                    result = self.check_item_with_retries(item_id, notify=notify)
-                except Exception as exc:
-                    current_item = self.db.get_item(item_id) or item
-                    result = {
-                        "item": current_item,
-                        "error": str(exc),
-                        "new": 0,
-                        "matched": 0,
-                        "pending_new": self.db.count_new(item_id) if current_item else 0,
-                        "search_url": RuTrackerClient.search_url(current_item["query"])
-                        if current_item
-                        else "",
-                    }
-                finally:
-                    work_queue.task_done()
+                    item_id = int(item["id"])
+                    if before_item:
+                        before_item(item_id)
+                    try:
+                        result = self.check_item_with_retries(item_id, notify=notify)
+                    except Exception as exc:
+                        current_item = self.db.get_item(item_id) or item
+                        result = {
+                            "item": current_item,
+                            "error": str(exc),
+                            "new": 0,
+                            "matched": 0,
+                            "pending_new": self.db.count_new(item_id) if current_item else 0,
+                            "search_url": RuTrackerClient.search_url(current_item["query"])
+                            if current_item
+                            else "",
+                        }
+                    finally:
+                        work_queue.task_done()
 
-                with summaries_lock:
-                    summaries.append(result)
-                if after_item:
-                    after_item(item_id, result)
+                    with summaries_lock:
+                        summaries.append(result)
+                    if after_item:
+                        after_item(item_id, result)
+            finally:
                 self.db.close()
 
         worker_count = min(max(1, max_workers or CHECK_ALL_MAX_WORKERS), len(check_items))
