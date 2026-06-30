@@ -1608,16 +1608,15 @@ class RuTrackerClient:
                 raise RuntimeError("RuTracker login failed; check .env credentials")
             self._logged_in = True
 
-    def search(self, query: str, min_seeders: int | None = None) -> list[SearchResult]:
+    def search(self, query: str) -> list[SearchResult]:
         self.login()
-        return self.search_one(query, min_seeders=min_seeders)
+        return self.search_one(query)
 
-    def search_one(self, query: str, min_seeders: int | None = None) -> list[SearchResult]:
+    def search_one(self, query: str) -> list[SearchResult]:
         url = build_rutracker_search_url(query)
         max_pages = self.db.get_setting_int("max_search_pages", MAX_SEARCH_PAGES)
         all_results: dict[str, SearchResult] = {}
         seen_urls: set[str] = set()
-        min_seeders = max(0, int(min_seeders or 0))
 
         for _ in range(max_pages):
             if url in seen_urls:
@@ -1633,12 +1632,8 @@ class RuTrackerClient:
                 if self.is_login_page(html):
                     raise TransientRuTrackerError("RuTracker returned login page during search")
 
-            page_results = parse_rutracker_results(html)
-            for result in page_results:
+            for result in parse_rutracker_results(html):
                 all_results[result.topic_id] = result
-
-            if min_seeders and page_results and max(result.seeders for result in page_results) < min_seeders:
-                break
 
             next_url = parse_next_page_url(html, url)
             if not next_url:
@@ -1699,11 +1694,10 @@ class CheckerService:
         if not item:
             raise KeyError("item not found")
 
-        min_seeders = int(item["min_seeders"])
-        raw_results = self.client.search(item["query"], min_seeders=min_seeders)
+        raw_results = self.client.search(item["query"])
         filtered = filter_results(
             raw_results,
-            min_seeders,
+            int(item["min_seeders"]),
             float(item["min_size_gb"]),
             bool(item["require_1080p"]),
         )
