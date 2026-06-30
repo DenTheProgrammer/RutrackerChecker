@@ -1,0 +1,4 @@
+# Local AutoResearch outputs
+studies/*/logs/
+studies/*/artifacts/
+studies/*/tmp/
