@@ -9,14 +9,14 @@
   "active_session_worker_count": 1,
   "direction": "lower",
   "graph_after_keep": true,
-  "incumbent_commit": "7155664",
-  "incumbent_label": "20260630-061533-0f2eb8b9",
-  "incumbent_metric": 6.353633,
+  "incumbent_commit": "bbb7630",
+  "incumbent_label": "20260630-061802-23111926",
+  "incumbent_metric": 6.085898,
   "metric_name": "mean_wall_clock_seconds",
   "schema_version": 1,
   "stop_conditions": [
     "max 5 cycles"
   ],
   "study": "speed-up-check-all-movies",
-  "updated_at": "2026-06-30T03:16:02Z"
+  "updated_at": "2026-06-30T03:18:38Z"
 }
