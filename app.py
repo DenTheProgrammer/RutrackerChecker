@@ -1689,8 +1689,13 @@ class CheckerService:
         self.client = client
         self.notifier = notifier
 
-    def check_item(self, item_id: int, notify: bool = True) -> dict[str, Any]:
-        item = self.db.get_item(item_id)
+    def check_item(
+        self,
+        item_id: int,
+        notify: bool = True,
+        item: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        item = item or self.db.get_item(item_id)
         if not item:
             raise KeyError("item not found")
 
@@ -1712,7 +1717,7 @@ class CheckerService:
             self.notifier.send_new_results(item, new_rows)
 
         return {
-            "item": self.db.get_item(item_id),
+            "item": item,
             "raw": len(raw_results),
             "matched": len(filtered),
             "new": len(new_rows),
@@ -1727,13 +1732,14 @@ class CheckerService:
         item_id: int,
         notify: bool = True,
         attempts: int = INITIAL_ITEM_CHECK_ATTEMPTS,
+        item: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         last_error: Exception | None = None
         used_attempts = 0
         for attempt in range(max(1, attempts)):
             used_attempts = attempt + 1
             try:
-                summary = self.check_item(item_id, notify=notify)
+                summary = self.check_item(item_id, notify=notify, item=item)
                 summary["attempts"] = used_attempts
                 return summary
             except Exception as exc:
@@ -1742,7 +1748,7 @@ class CheckerService:
                     break
                 time.sleep(INITIAL_ITEM_CHECK_RETRY_SECONDS * (attempt + 1))
 
-        item = self.db.get_item(item_id)
+        item = item or self.db.get_item(item_id)
         return {
             "item": item,
             "error": str(last_error) if last_error else "check failed",
@@ -1795,7 +1801,7 @@ class CheckerService:
                 if before_item:
                     before_item(item_id)
                 try:
-                    result = self.check_item_with_retries(item_id, notify=notify)
+                    result = self.check_item_with_retries(item_id, notify=notify, item=item)
                 except Exception as exc:
                     current_item = self.db.get_item(item_id) or item
                     result = {
