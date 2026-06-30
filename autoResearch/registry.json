@@ -1,5 +1,12 @@
 {
   "created_at": "2026-06-30T02:53:10Z",
   "schema_version": 1,
-  "studies": []
+  "studies": [
+    {
+      "created_at": "2026-06-30T02:58:22Z",
+      "objective": "Reduce wall-clock time for checking all enabled RuTracker movie cards without increasing check errors or weakening result correctness",
+      "slug": "speed-up-check-all-movies",
+      "title": "Speed up check all movies"
+    }
+  ]
 }

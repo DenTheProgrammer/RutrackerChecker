@@ -1,0 +1,46 @@
+{
+  "baseline": {
+    "locked": false,
+    "summary": null
+  },
+  "context_control": {
+    "default_agent_mode": "single",
+    "requires_context_policy_for_blind": true,
+    "requires_worker_id_for_subagent_candidates": true
+  },
+  "contract_hash": "301daceef8fb6a77",
+  "created_at": "2026-06-30T02:58:22Z",
+  "evaluation": {
+    "baseline_repeats": 3,
+    "command": "",
+    "cwd": "project-root",
+    "parser_group": 1,
+    "parser_regex": "",
+    "timeout_seconds": 0
+  },
+  "launch_gate": {
+    "ask_graph_after_kept_improvement": true,
+    "ask_subagents_for_parallel_or_blind_context": true,
+    "requires_explicit_user_start": true,
+    "requires_rollback_authorization": true,
+    "requires_stop_conditions": true
+  },
+  "metric": {
+    "aggregation": "single_run",
+    "direction": "",
+    "min_delta": 0.0,
+    "name": ""
+  },
+  "objective": "Reduce wall-clock time for checking all enabled RuTracker movie cards without increasing check errors or weakening result correctness",
+  "schema_version": 1,
+  "scope": {
+    "allowed_change_paths": [],
+    "forbidden_actions": [
+      "Do not change the metric, parser, eval command, locked fixtures, or baseline data during candidate loops."
+    ],
+    "locked_paths": []
+  },
+  "status": "draft",
+  "study": "speed-up-check-all-movies",
+  "title": "Speed up check all movies"
+}
