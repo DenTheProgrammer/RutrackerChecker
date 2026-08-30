@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Net;
+using System.Net.Http;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -9,17 +11,35 @@ internal static class Program
 {
     private const string Url = "http://127.0.0.1:9876/";
     private const string AppHost = "127.0.0.1";
+    private const int AppPortNumber = 9876;
     private const string AppPort = "9876";
     private const string RequiredVersion = "1.5.1";
+    private const string WindowTitle = "RuTracker Checker";
+    private const string UiMutexName = @"Local\RutrackerChecker.Ui";
     private const string ShortcutName = "RuTracker Checker.lnk";
     private const string StartupShortcutName = "RutrackerChecker Background.lnk";
     private const string ShortcutPromptFileName = "desktop-shortcut-prompted.flag";
     private const string StartupPromptFileName = "startup-prompted.flag";
+    private const int SwRestore = 9;
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr FindWindow(string? lpClassName, string lpWindowName);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr hWnd);
 
     [STAThread]
-    private static async Task Main(string[] args)
+    private static void Main(string[] args)
     {
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
 
         bool serverOnly = args.Any(arg => arg.Equals("--server-only", StringComparison.OrdinalIgnoreCase));
         string appDir = AppContext.BaseDirectory;
@@ -29,6 +49,11 @@ internal static class Program
         string stdoutLog = Path.Combine(dataDir, "server.out.log");
         string stderrLog = Path.Combine(dataDir, "server.err.log");
         string launcherLog = Path.Combine(dataDir, "launcher.log");
+
+        AppendLauncherLog(
+            launcherLog,
+            $"started pid={Environment.ProcessId} serverOnly={serverOnly}"
+        );
 
         if (!File.Exists(appPath))
         {
@@ -41,37 +66,64 @@ internal static class Program
             return;
         }
 
-        PromptForDesktopShortcutIfNeeded(appDir, dataDir, launcherLog);
-
-        ServerState state = await GetServerState();
-        if (state.IsChecker)
+        Mutex? uiMutex = null;
+        if (!serverOnly)
         {
-            StartTrayIfBackgroundEnabled(appDir, state.BackgroundEnabled);
-            if (!serverOnly)
+            uiMutex = new Mutex(true, UiMutexName, out bool createdNew);
+            if (!createdNew)
             {
-                PromptForStartupIfNeeded(appDir, dataDir, launcherLog, state.BackgroundEnabled);
-            }
-            if (serverOnly)
-            {
+                uiMutex.Dispose();
+                AppendLauncherLog(launcherLog, "another UI instance is already running");
+                if (WaitForExistingWindow())
+                {
+                    return;
+                }
+
+                MessageBox.Show(
+                    "RuTracker Checker is already starting. If the window does not appear, close RutrackerChecker.exe in Task Manager and try again.",
+                    WindowTitle,
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information
+                );
                 return;
             }
-            OpenAppWindow(dataDir, launcherLog);
-            return;
         }
 
-        if (state.IsUp)
+        try
         {
-            MessageBox.Show(
-                "Port 9876 is already used by another local service, so RuTracker Release Checker cannot start.\n\nClose that process or free http://127.0.0.1:9876/, then try again.",
-                "RuTracker Release Checker",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning
+            PromptForDesktopShortcutIfNeeded(appDir, dataDir, launcherLog);
+
+            ServerState state = GetServerState();
+            AppendLauncherLog(
+                launcherLog,
+                $"server state up={state.IsUp} checker={state.IsChecker}"
             );
-            return;
-        }
+            if (state.IsChecker)
+            {
+                StartTrayIfBackgroundEnabled(appDir, state.BackgroundEnabled);
+                if (!serverOnly)
+                {
+                    PromptForStartupIfNeeded(appDir, dataDir, launcherLog, state.BackgroundEnabled);
+                }
+                if (serverOnly)
+                {
+                    return;
+                }
+                OpenAppWindow(dataDir, launcherLog);
+                return;
+            }
 
-        if (!state.IsUp)
-        {
+            if (state.IsUp)
+            {
+                MessageBox.Show(
+                    "Port 9876 is already used by another local service, so RuTracker Release Checker cannot start.\n\nClose that process or free http://127.0.0.1:9876/, then try again.",
+                    "RuTracker Release Checker",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning
+                );
+                return;
+            }
+
             PythonCommand? python = FindPython();
             if (python is null)
             {
@@ -86,9 +138,9 @@ internal static class Program
 
             try
             {
-                File.AppendAllText(
+                AppendLauncherLog(
                     launcherLog,
-                    $"{DateTime.Now:O} starting server with {python.FileName} {python.ArgumentPrefix}\"{appPath}\"{Environment.NewLine}"
+                    $"starting server with {python.FileName} {python.ArgumentPrefix}\"{appPath}\""
                 );
                 Process.Start(new ProcessStartInfo
                 {
@@ -107,10 +159,7 @@ internal static class Program
             }
             catch (Exception ex)
             {
-                File.AppendAllText(
-                    launcherLog,
-                    $"{DateTime.Now:O} start failed: {ex}{Environment.NewLine}"
-                );
+                AppendLauncherLog(launcherLog, "start failed", ex);
                 MessageBox.Show(
                     $"Could not start the local server:\n{ex.Message}",
                     "RuTracker Release Checker",
@@ -119,69 +168,68 @@ internal static class Program
                 );
                 return;
             }
-        }
 
-        if (!await WaitForServer())
-        {
-            MessageBox.Show(
-                "The local server did not start on http://127.0.0.1:9876/.\n\nDiagnostics were written to:\n" +
-                launcherLog + "\n" +
-                stdoutLog + "\n" +
-                stderrLog,
-                "RuTracker Release Checker",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning
-            );
-            return;
-        }
+            if (!WaitForServer())
+            {
+                MessageBox.Show(
+                    "The local server did not start on http://127.0.0.1:9876/.\n\nDiagnostics were written to:\n" +
+                    launcherLog + "\n" +
+                    stdoutLog + "\n" +
+                    stderrLog,
+                    "RuTracker Release Checker",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning
+                );
+                return;
+            }
 
-        state = await GetServerState();
-        StartTrayIfBackgroundEnabled(appDir, state.BackgroundEnabled);
-        if (!serverOnly)
-        {
-            PromptForStartupIfNeeded(appDir, dataDir, launcherLog, state.BackgroundEnabled);
+            state = GetServerState();
+            StartTrayIfBackgroundEnabled(appDir, state.BackgroundEnabled);
+            if (!serverOnly)
+            {
+                PromptForStartupIfNeeded(appDir, dataDir, launcherLog, state.BackgroundEnabled);
+            }
+            if (serverOnly)
+            {
+                return;
+            }
+            OpenAppWindow(dataDir, launcherLog);
         }
-        if (serverOnly)
+        finally
         {
-            return;
+            if (uiMutex is not null)
+            {
+                try
+                {
+                    uiMutex.ReleaseMutex();
+                }
+                catch
+                {
+                }
+                uiMutex.Dispose();
+            }
         }
-        OpenAppWindow(dataDir, launcherLog);
     }
 
     private static void OpenAppWindow(string dataDir, string launcherLog)
     {
-        Exception? windowError = null;
-        Thread uiThread = new(() =>
+        try
         {
-            try
-            {
-                Application.EnableVisualStyles();
-                Application.SetCompatibleTextRenderingDefault(false);
-                using BrowserForm form = new(Url, dataDir, launcherLog);
-                Application.Run(form);
-            }
-            catch (Exception ex)
-            {
-                windowError = ex;
-            }
-        });
-        uiThread.SetApartmentState(ApartmentState.STA);
-        uiThread.Start();
-        uiThread.Join();
-
-        if (windowError is null)
-        {
-            return;
+            AppendLauncherLog(launcherLog, "opening app window");
+            using BrowserForm form = new(Url, dataDir, launcherLog);
+            Application.Run(form);
         }
-
-        AppendLauncherLog(launcherLog, "app window failed", windowError);
-        MessageBox.Show(
-            "Could not open the app window. The WebView2 Runtime may be missing or unavailable.\n\nOpening RuTracker Checker in your browser instead.",
-            "RuTracker Checker",
-            MessageBoxButtons.OK,
-            MessageBoxIcon.Warning
-        );
-        OpenExternalUrl(Url);
+        catch (Exception ex)
+        {
+            AppendLauncherLog(launcherLog, "app window failed", ex);
+            MessageBox.Show(
+                "Could not open the app window. The WebView2 Runtime may be missing or unavailable.\n\nOpening RuTracker Checker in your browser instead.",
+                WindowTitle,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning
+            );
+            OpenExternalUrl(Url);
+        }
     }
 
     private static void OpenExternalUrl(string url)
@@ -193,14 +241,14 @@ internal static class Program
         });
     }
 
-    private static void AppendLauncherLog(string launcherLog, string message, Exception ex)
+    private static void AppendLauncherLog(string launcherLog, string message, Exception? ex = null)
     {
         try
         {
-            File.AppendAllText(
-                launcherLog,
-                $"{DateTime.Now:O} {message}: {ex}{Environment.NewLine}"
-            );
+            string line = ex is null
+                ? $"{DateTime.Now:O} {message}{Environment.NewLine}"
+                : $"{DateTime.Now:O} {message}: {ex}{Environment.NewLine}";
+            File.AppendAllText(launcherLog, line);
         }
         catch
         {
@@ -221,7 +269,7 @@ internal static class Program
             this.dataDir = dataDir;
             this.launcherLog = launcherLog;
 
-            Text = "RuTracker Checker";
+            Text = WindowTitle;
             StartPosition = FormStartPosition.CenterScreen;
             Size = new Size(1180, 800);
             MinimumSize = new Size(920, 640);
@@ -252,14 +300,20 @@ internal static class Program
             didInitialize = true;
             try
             {
-                await InitializeWebView();
+                Task init = InitializeWebView();
+                if (await Task.WhenAny(init, Task.Delay(TimeSpan.FromSeconds(20))) != init)
+                {
+                    throw new TimeoutException("WebView2 initialization timed out.");
+                }
+
+                await init;
             }
             catch (Exception ex)
             {
                 AppendLauncherLog(launcherLog, "webview initialization failed", ex);
                 MessageBox.Show(
                     "Could not open the app window. The WebView2 Runtime may be missing or unavailable.\n\nOpening RuTracker Checker in your browser instead.",
-                    "RuTracker Checker",
+                    WindowTitle,
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning
                 );
@@ -345,7 +399,7 @@ internal static class Program
 
         DialogResult answer = MessageBox.Show(
             "Create a desktop shortcut for RuTracker Checker?",
-            "RuTracker Checker",
+            WindowTitle,
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Question,
             MessageBoxDefaultButton.Button1
@@ -370,7 +424,7 @@ internal static class Program
             );
             MessageBox.Show(
                 $"Could not create the desktop shortcut:\n{ex.Message}",
-                "RuTracker Checker",
+                WindowTitle,
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning
             );
@@ -452,7 +506,7 @@ internal static class Program
             );
             MessageBox.Show(
                 $"Could not add RuTracker Checker to Startup:\n{ex.Message}",
-                "RuTracker Checker",
+                WindowTitle,
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning
             );
@@ -463,7 +517,7 @@ internal static class Program
     {
         using Form form = new()
         {
-            Text = "RuTracker Checker",
+            Text = "RuTracker Checker — автозагрузка",
             StartPosition = FormStartPosition.CenterScreen,
             FormBorderStyle = FormBorderStyle.FixedDialog,
             MaximizeBox = false,
@@ -765,36 +819,66 @@ internal static class Program
         return "\"" + value.Replace("\"", "\\\"") + "\"";
     }
 
-    private static async Task<bool> WaitForServer()
+    private static bool WaitForServer()
     {
         DateTime deadline = DateTime.UtcNow.AddSeconds(12);
         while (DateTime.UtcNow < deadline)
         {
-            ServerState state = await GetServerState();
+            ServerState state = GetServerState();
             if (state.IsChecker)
             {
                 return true;
             }
-            await Task.Delay(500);
+            Thread.Sleep(250);
         }
         return false;
     }
 
-    private static async Task<ServerState> GetServerState()
+    private static bool IsLocalPortOpen()
     {
         try
         {
-            using HttpClient client = new()
+            using TcpClient client = new();
+            using CancellationTokenSource cts = new(TimeSpan.FromMilliseconds(300));
+            client.ConnectAsync(IPAddress.Loopback, AppPortNumber, cts.Token).GetAwaiter().GetResult();
+            return client.Connected;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static ServerState GetServerState()
+    {
+        if (!IsLocalPortOpen())
+        {
+            return new ServerState(false, false, "", false);
+        }
+
+        try
+        {
+            using SocketsHttpHandler handler = new()
             {
-                Timeout = TimeSpan.FromSeconds(1)
+                UseProxy = false,
+                AllowAutoRedirect = false,
+                ConnectTimeout = TimeSpan.FromMilliseconds(500),
+                PooledConnectionLifetime = TimeSpan.Zero
             };
-            using HttpResponseMessage response = await client.GetAsync(Url + "api/health");
+            using HttpClient client = new(handler)
+            {
+                Timeout = TimeSpan.FromMilliseconds(800)
+            };
+            using HttpResponseMessage response = client
+                .GetAsync(Url + "api/health")
+                .GetAwaiter()
+                .GetResult();
             if (response.StatusCode != HttpStatusCode.OK)
             {
                 return new ServerState(true, false, "", false);
             }
 
-            string body = await response.Content.ReadAsStringAsync();
+            string body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
             string marker = "\"version\":";
             int index = body.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
             if (index < 0)
@@ -812,6 +896,38 @@ internal static class Program
         {
             return new ServerState(false, false, "", false);
         }
+    }
+
+    private static bool WaitForExistingWindow()
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(8);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (TryActivateExistingWindow())
+            {
+                return true;
+            }
+            Thread.Sleep(250);
+        }
+        return TryActivateExistingWindow();
+    }
+
+    private static bool TryActivateExistingWindow()
+    {
+        IntPtr hwnd = FindWindow(null, WindowTitle);
+        if (hwnd == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        if (IsIconic(hwnd))
+        {
+            ShowWindow(hwnd, SwRestore);
+        }
+
+        ShowWindow(hwnd, SwRestore);
+        SetForegroundWindow(hwnd);
+        return true;
     }
 
     private sealed record PythonCommand(string FileName, string ArgumentPrefix);

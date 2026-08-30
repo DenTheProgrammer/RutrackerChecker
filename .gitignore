@@ -7,3 +7,4 @@ __pycache__/
 Microsoft.Web.WebView2*.xml
 launcher/bin/
 launcher/obj/
+launcher/publish/
