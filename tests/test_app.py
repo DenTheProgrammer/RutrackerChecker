@@ -64,6 +64,11 @@ SAMPLE_HTML = """
 </html>
 """
 
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0"
+)
+
 
 class ParserTests(unittest.TestCase):
     def test_extracts_topic_title_link_seeders(self):
@@ -877,6 +882,7 @@ class DatabaseTests(unittest.TestCase):
                     f"http://127.0.0.1:{server.server_port}/api/rutracker/session",
                     data=json.dumps(
                         {
+                            "user_agent": BROWSER_USER_AGENT,
                             "cookies": [
                                 {
                                     "name": "bb_session",
@@ -1576,13 +1582,15 @@ class DatabaseTests(unittest.TestCase):
                         "value": "not-saved",
                         "domain": ".example.com",
                     },
-                ]
+                ],
+                BROWSER_USER_AGENT,
             )
 
             self.assertEqual(saved, 1)
             self.assertTrue(db.has_rutracker_access())
             self.assertTrue(db.get_public_settings()["has_rutracker_session"])
             self.assertNotIn("rutracker_session_cookies", db.get_public_settings())
+            self.assertNotIn("rutracker_session_user_agent", db.get_public_settings())
             self.assertEqual(db.get_rutracker_session_cookies()[0]["name"], "bb_session")
             db.close()
 
@@ -1598,7 +1606,8 @@ class DatabaseTests(unittest.TestCase):
                         "path": "/forum/",
                         "secure": True,
                     }
-                ]
+                ],
+                BROWSER_USER_AGENT,
             )
             client = RuTrackerClient(db)
 
@@ -1607,6 +1616,7 @@ class DatabaseTests(unittest.TestCase):
             client.cookie_jar.add_cookie_header(request)
 
             self.assertIn("bb_session=session-secret", request.get_header("Cookie"))
+            self.assertEqual(client._request_user_agent, BROWSER_USER_AGENT)
             db.close()
 
     def test_rutracker_client_marks_missing_login_for_browser_prompt(self):

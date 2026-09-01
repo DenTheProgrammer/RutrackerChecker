@@ -540,10 +540,16 @@ internal static class Program
                 {
                     throw new InvalidOperationException("RuTracker не выдал cookies сессии");
                 }
+                string userAgentJson = await webView.CoreWebView2.ExecuteScriptAsync("navigator.userAgent");
+                string? userAgent = JsonSerializer.Deserialize<string>(userAgentJson);
+                if (string.IsNullOrWhiteSpace(userAgent))
+                {
+                    throw new InvalidOperationException("Не удалось определить User-Agent окна RuTracker");
+                }
 
                 using HttpClient client = new() { Timeout = TimeSpan.FromSeconds(10) };
                 using StringContent content = new(
-                    JsonSerializer.Serialize(new { cookies = safeCookies }),
+                    JsonSerializer.Serialize(new { cookies = safeCookies, user_agent = userAgent }),
                     Encoding.UTF8,
                     "application/json"
                 );

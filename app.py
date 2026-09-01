@@ -1165,9 +1165,12 @@ class Database:
             return []
         return payload if isinstance(payload, list) else []
 
-    def save_rutracker_session_cookies(self, cookies: Any) -> int:
+    def save_rutracker_session_cookies(self, cookies: Any, user_agent: Any = "") -> int:
         if not isinstance(cookies, list):
             raise ValueError("cookies must be a list")
+        normalized_user_agent = str(user_agent or "").strip()
+        if not normalized_user_agent or len(normalized_user_agent) > 1024:
+            raise ValueError("RuTracker browser User-Agent was not provided")
         normalized: list[dict[str, Any]] = []
         for raw_cookie in cookies[:50]:
             if not isinstance(raw_cookie, dict):
@@ -1199,6 +1202,7 @@ class Database:
             "rutracker_session_cookies",
             json.dumps(normalized, ensure_ascii=False, separators=(",", ":")),
         )
+        self.set_setting("rutracker_session_user_agent", normalized_user_agent)
         self.set_setting("rutracker_auth_required", "0")
         return len(normalized)
 
@@ -1553,7 +1557,8 @@ class RuTrackerClient:
             urllib.request.HTTPCookieProcessor(self.cookie_jar)
         )
         self._logged_in = False
-        self._identity: tuple[str, str, str] | None = None
+        self._identity: tuple[str, str, str, str] | None = None
+        self._request_user_agent = "RutrackerChecker/1.0 (+local personal monitor)"
         self._lock = threading.Lock()
 
     def credentials(self) -> tuple[str, str]:
@@ -1567,9 +1572,10 @@ class RuTrackerClient:
         username: str,
         password: str,
         browser_cookies: list[dict[str, Any]],
+        browser_user_agent: str,
     ) -> None:
         serialized_cookies = json.dumps(browser_cookies, sort_keys=True, separators=(",", ":"))
-        identity = (username, password, serialized_cookies)
+        identity = (username, password, serialized_cookies, browser_user_agent)
         if self._identity == identity:
             return
         self.cookie_jar = CookieJar()
@@ -1578,6 +1584,11 @@ class RuTrackerClient:
         )
         self._identity = identity
         self._logged_in = False
+        self._request_user_agent = (
+            browser_user_agent.strip()
+            if browser_cookies and browser_user_agent.strip()
+            else "RutrackerChecker/1.0 (+local personal monitor)"
+        )
         for raw_cookie in browser_cookies:
             domain = str(raw_cookie.get("domain") or ".rutracker.org")
             path = str(raw_cookie.get("path") or "/")
@@ -1621,7 +1632,7 @@ class RuTrackerClient:
                 url,
                 data=encoded_data,
                 headers={
-                    "User-Agent": "RutrackerChecker/1.0 (+local personal monitor)",
+                    "User-Agent": self._request_user_agent,
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                     "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
                     "Cache-Control": "no-cache",
@@ -1689,12 +1700,18 @@ class RuTrackerClient:
     def login(self) -> None:
         username, password = self.credentials()
         browser_cookies = self.db.get_rutracker_session_cookies()
+        browser_user_agent = self.db.get_setting("rutracker_session_user_agent")
         if self.db.get_setting("rutracker_auth_required") == "1":
             raise RuTrackerAuthenticationRequiredError(
                 "Требуется вход в RuTracker через браузер приложения"
             )
         with self._lock:
-            self.reset_session_if_needed(username, password, browser_cookies)
+            self.reset_session_if_needed(
+                username,
+                password,
+                browser_cookies,
+                browser_user_agent,
+            )
             if self._logged_in:
                 return
             if browser_cookies:
@@ -2881,7 +2898,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
 
             if request_path == "/api/rutracker/session":
-                saved = DB.save_rutracker_session_cookies(self.read_json().get("cookies"))
+                session_payload = self.read_json()
+                saved = DB.save_rutracker_session_cookies(
+                    session_payload.get("cookies"),
+                    session_payload.get("user_agent"),
+                )
                 self.send_json(
                     {
                         "saved": saved,
