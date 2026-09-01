@@ -82,8 +82,8 @@
       <div class="credential-copy">
         <span class="gate-mark">RT</span>
         <div>
-          <h2>Введите логин и пароль RuTracker</h2>
-          <p>Без авторизации нельзя добавить новый фильм: приложение не сможет проверить выдачу и сохранить рабочий поиск.</p>
+          <h2 id="credentialTitle">Войдите в RuTracker</h2>
+          <p id="credentialMessage">Авторизация откроется в отдельном окне приложения. После входа фоновые проверки продолжат работать с сохраненной сессией.</p>
         </div>
       </div>
       <div class="credential-fields">
@@ -96,7 +96,13 @@
           <input id="gatePassword" type="password" autocomplete="current-password" placeholder="Обязательно">
         </label>
       </div>
-      <span id="credentialState">Сохраняется автоматически</span>
+      <div class="credential-actions">
+        <button id="rutrackerLoginButton" class="primary-button" type="button">
+          <span data-icon="external"></span>
+          Войти через браузер
+        </button>
+        <span id="credentialState">Ожидается вход</span>
+      </div>
     </section>
 
     <section class="settings-drawer" id="settingsDrawer" hidden>
@@ -113,6 +119,10 @@
           <span>RuTracker пароль</span>
           <input name="rutracker_password" type="password" autocomplete="current-password" placeholder="Оставьте пустым">
         </label>
+        <button id="settingsRutrackerLoginButton" class="ghost-button" type="button">
+          <span data-icon="external"></span>
+          Войти или обновить сессию RuTracker
+        </button>
         <label>
           <span>Сиды</span>
           <input name="default_min_seeders" type="number" min="0" value="5">

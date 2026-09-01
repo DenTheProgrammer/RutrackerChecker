@@ -7,6 +7,10 @@ const credentialGate = document.querySelector("#credentialGate");
 const gateUsername = document.querySelector("#gateUsername");
 const gatePassword = document.querySelector("#gatePassword");
 const credentialState = document.querySelector("#credentialState");
+const credentialTitle = document.querySelector("#credentialTitle");
+const credentialMessage = document.querySelector("#credentialMessage");
+const rutrackerLoginButton = document.querySelector("#rutrackerLoginButton");
+const settingsRutrackerLoginButton = document.querySelector("#settingsRutrackerLoginButton");
 const movieModal = document.querySelector("#movieModal");
 const movieForm = document.querySelector("#movieForm");
 const modalTitle = document.querySelector("#modalTitle");
@@ -264,7 +268,11 @@ function posterFallback(title) {
 
 function hasCredentials() {
   const config = state.config || {};
-  return Boolean(String(config.rutracker_username || "").trim() && config.has_rutracker_password);
+  if (config.rutracker_auth_required) return false;
+  return Boolean(
+    config.has_rutracker_session ||
+    (String(config.rutracker_username || "").trim() && config.has_rutracker_password)
+  );
 }
 
 function setSettingsStatus(message, isError = false) {
@@ -278,16 +286,56 @@ function focusCredentialGate() {
   credentialGate.hidden = false;
   credentialGate.classList.add("attention");
   setTimeout(() => credentialGate.classList.remove("attention"), 520);
-  const target = gateUsername.value.trim() ? gatePassword : gateUsername;
+  const target = rutrackerLoginButton || (gateUsername.value.trim() ? gatePassword : gateUsername);
   target.focus();
+}
+
+function requestRutrackerLogin() {
+  if (!window.chrome?.webview) {
+    setSettingsStatus("Откройте RuTracker Checker через RutrackerChecker.exe для входа", true);
+    return;
+  }
+  setSettingsStatus("Открываем вход RuTracker...");
+  window.chrome.webview.postMessage({ type: "rutracker-login" });
+}
+
+async function handleRutrackerLoginSaved() {
+  setSettingsStatus("Вход сохранен. Повторяем проверку...");
+  await load();
+  try {
+    const payload = await api("/api/check-all", { method: "POST" });
+    syncCheckPayload(payload);
+    renderCheckAllButton();
+    renderCards();
+    startCheckPolling();
+    statusLine.textContent = "Вход выполнен. Повторяем проверку карточек...";
+  } catch (error) {
+    statusLine.textContent = `Вход сохранен, но проверку не удалось запустить: ${error.message}`;
+  }
 }
 
 function applySettingsToForms() {
   const config = state.config || {};
+  const authRequired = Boolean(config.rutracker_auth_required);
   statusLine.textContent = `Автопроверка каждые ${config.check_interval_minutes || 0} мин`;
   setSettingsStatus(
-    hasCredentials() ? "RuTracker сохранен · autosave включен" : "Введите RuTracker логин и пароль"
+    authRequired
+      ? "Требуется повторный вход в RuTracker"
+      : config.has_rutracker_session
+        ? "RuTracker подключен через браузер"
+        : hasCredentials()
+          ? "RuTracker сохранен · autosave включен"
+          : "Войдите в RuTracker через браузер"
   );
+  credentialState.classList.toggle("error", authRequired);
+  if (credentialTitle) {
+    credentialTitle.textContent = authRequired ? "Сессия RuTracker истекла" : "Войдите в RuTracker";
+  }
+  if (credentialMessage) {
+    credentialMessage.textContent = authRequired
+      ? "Проверки приостановлены. Войдите снова в отдельном окне — после этого приложение повторит проверку."
+      : "Авторизация откроется в отдельном окне приложения. После входа фоновые проверки продолжат работать с сохраненной сессией.";
+  }
   isHydratingSettings = true;
   settingsForm.rutracker_username.value = config.rutracker_username || "";
   settingsForm.rutracker_password.value = "";
@@ -310,7 +358,7 @@ function applySettingsToForms() {
   gatePassword.placeholder = config.has_rutracker_password
     ? SECRET_PLACEHOLDER
     : "Обязательно";
-  credentialGate.hidden = hasCredentials();
+  credentialGate.hidden = hasCredentials() && !authRequired;
   isHydratingSettings = false;
 }
 
@@ -413,6 +461,7 @@ function renderUpdateStatus() {
   updateBadge.classList.toggle("error", stateName === "error" || stateName === "git_missing" || stateName === "no_git_repo");
 
   updateText.textContent = update.message || "Проверяем обновления...";
+  updateText.title = updateText.textContent;
   updateButton.hidden = !update.can_apply;
   updateButton.disabled = !update.can_apply;
 }
@@ -432,7 +481,7 @@ function renderCards() {
     <span class="add-card-inner">
       <span class="add-plus">${icon("plus")}</span>
       <strong>${locked ? "Сначала войдите" : "Добавить фильм"}</strong>
-      <span>${locked ? "Нужны логин и пароль RuTracker" : "Новый поиск RuTracker"}</span>
+      <span>${locked ? "Нужен вход в RuTracker" : "Новый поиск RuTracker"}</span>
     </span>
   `;
   add.addEventListener("click", () => {
@@ -832,10 +881,15 @@ function rememberCheck(result) {
   if (!result || !result.item) return;
   lastChecks.set(result.item.id, {
     error: Boolean(result.error),
+    authRequired: Boolean(result.auth_required),
     message: result.error
       ? `Ошибка: ${result.error}`
       : `${result.raw || 0} найдено, ${result.matched || 0} подходит, ${result.new || 0} новых.`,
   });
+  if (result.auth_required) {
+    state.config = { ...state.config, rutracker_auth_required: true };
+    applySettingsToForms();
+  }
 }
 
 function rememberCheckAllSummary(summary) {
@@ -983,8 +1037,20 @@ function startPosterPolling() {
 
 async function refreshRuntime() {
   try {
-    state.runtime = await api("/api/runtime");
+    const [runtime, settings] = await Promise.all([
+      api("/api/runtime"),
+      api("/api/settings"),
+    ]);
+    const authStateChanged =
+      Boolean(state.config?.rutracker_auth_required) !== Boolean(settings.rutracker_auth_required) ||
+      Boolean(state.config?.has_rutracker_session) !== Boolean(settings.has_rutracker_session);
+    state.runtime = runtime;
+    state.config = { ...state.config, ...settings };
     renderRuntime();
+    if (authStateChanged) {
+      applySettingsToForms();
+      renderCards();
+    }
   } catch (error) {
     runtimePanel.classList.remove("running", "paused");
     runtimePanel.classList.add("stale");
@@ -1077,7 +1143,7 @@ async function saveSettings(payload = collectSettingsPayload()) {
     }
     applySettingsToForms();
     renderCards();
-    setSettingsStatus(hasCredentials() ? "Сохранено" : "Введите RuTracker логин и пароль");
+    setSettingsStatus(hasCredentials() ? "Сохранено" : "Войдите в RuTracker через браузер");
   } catch (error) {
     setSettingsStatus(`Ошибка сохранения: ${error.message}`, true);
   }
@@ -1098,6 +1164,17 @@ function syncCredentialGateToSettings() {
 
 settingsToggle.addEventListener("click", () => {
   settingsDrawer.hidden = !settingsDrawer.hidden;
+});
+
+rutrackerLoginButton?.addEventListener("click", requestRutrackerLogin);
+settingsRutrackerLoginButton?.addEventListener("click", requestRutrackerLogin);
+
+window.chrome?.webview?.addEventListener("message", (event) => {
+  if (event.data?.type === "rutracker-login-saved") {
+    handleRutrackerLoginSaved();
+  } else if (event.data?.type === "rutracker-login-error") {
+    setSettingsStatus(event.data.message || "Не удалось сохранить вход RuTracker", true);
+  }
 });
 
 themeToggle.addEventListener("click", () => {

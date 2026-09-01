@@ -19,6 +19,7 @@ from app import (
     CheckerService,
     Database,
     RequestHandler,
+    RuTrackerAuthenticationRequiredError,
     RuTrackerClient,
     SearchResult,
     TransientRuTrackerError,
@@ -864,6 +865,50 @@ class DatabaseTests(unittest.TestCase):
                     server.server_close()
                     db.close()
 
+    def test_rutracker_session_api_stores_only_rutracker_cookies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            db.mark_rutracker_auth_required()
+            with patch.object(app, "DB", db):
+                server = ThreadingHTTPServer(("127.0.0.1", 0), RequestHandler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_port}/api/rutracker/session",
+                    data=json.dumps(
+                        {
+                            "cookies": [
+                                {
+                                    "name": "bb_session",
+                                    "value": "session-secret",
+                                    "domain": ".rutracker.org",
+                                    "path": "/forum/",
+                                    "secure": True,
+                                },
+                                {
+                                    "name": "foreign",
+                                    "value": "do-not-save",
+                                    "domain": ".example.com",
+                                },
+                            ]
+                        }
+                    ).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+
+                try:
+                    with urllib.request.urlopen(request, timeout=5) as response:
+                        payload = json.loads(response.read().decode("utf-8"))
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    db.close()
+
+            self.assertEqual(payload["saved"], 1)
+            self.assertTrue(payload["config"]["has_rutracker_session"])
+            self.assertFalse(payload["config"]["rutracker_auth_required"])
+
     def test_opening_ui_starts_metadata_backfill(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / "app.db")
@@ -1511,6 +1556,68 @@ class DatabaseTests(unittest.TestCase):
             self.assertFalse(db.get_public_settings()["background_enabled"])
             self.assertEqual(db.get_public_settings()["reminder_interval_hours"], 12)
             self.assertEqual(db.get_public_settings()["max_search_pages"], 4)
+            db.close()
+
+    def test_rutracker_browser_session_is_validated_and_exposed_as_boolean(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+
+            saved = db.save_rutracker_session_cookies(
+                [
+                    {
+                        "name": "bb_session",
+                        "value": "session-secret",
+                        "domain": ".rutracker.org",
+                        "path": "/forum/",
+                        "secure": True,
+                    },
+                    {
+                        "name": "ignored",
+                        "value": "not-saved",
+                        "domain": ".example.com",
+                    },
+                ]
+            )
+
+            self.assertEqual(saved, 1)
+            self.assertTrue(db.has_rutracker_access())
+            self.assertTrue(db.get_public_settings()["has_rutracker_session"])
+            self.assertNotIn("rutracker_session_cookies", db.get_public_settings())
+            self.assertEqual(db.get_rutracker_session_cookies()[0]["name"], "bb_session")
+            db.close()
+
+    def test_rutracker_client_uses_browser_session_without_password_login(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            db.save_rutracker_session_cookies(
+                [
+                    {
+                        "name": "bb_session",
+                        "value": "session-secret",
+                        "domain": ".rutracker.org",
+                        "path": "/forum/",
+                        "secure": True,
+                    }
+                ]
+            )
+            client = RuTrackerClient(db)
+
+            client.login()
+            request = urllib.request.Request("https://rutracker.org/forum/tracker.php")
+            client.cookie_jar.add_cookie_header(request)
+
+            self.assertIn("bb_session=session-secret", request.get_header("Cookie"))
+            db.close()
+
+    def test_rutracker_client_marks_missing_login_for_browser_prompt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            client = RuTrackerClient(db)
+
+            with self.assertRaises(RuTrackerAuthenticationRequiredError):
+                client.login()
+
+            self.assertTrue(db.get_public_settings()["rutracker_auth_required"])
             db.close()
 
     def test_runtime_reminder_due_now_when_interval_was_reduced(self):

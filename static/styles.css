@@ -225,6 +225,12 @@ h1 {
   gap: 10px;
 }
 
+.credential-actions {
+  display: grid;
+  justify-items: end;
+  gap: 7px;
+}
+
 #credentialState {
   justify-self: end;
   color: var(--muted);
@@ -519,9 +525,9 @@ input:focus {
 
 .update-badge span {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  line-height: 1.25;
 }
 
 .update-badge .ghost-button {
@@ -1200,6 +1206,10 @@ button:disabled {
 
   #credentialState {
     justify-self: start;
+  }
+
+  .credential-actions {
+    justify-items: start;
   }
 
   .runtime-strip {

@@ -3,6 +3,8 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using System.Windows.Forms;
@@ -262,6 +264,8 @@ internal static class Program
         private readonly string launcherLog;
         private readonly WebView2 webView;
         private bool didInitialize;
+        private CoreWebView2Environment? webViewEnvironment;
+        private RutrackerAuthForm? rutrackerAuthForm;
 
         public BrowserForm(string url, string dataDir, string launcherLog)
         {
@@ -326,10 +330,28 @@ internal static class Program
         {
             string userDataFolder = Path.Combine(dataDir, "webview2");
             Directory.CreateDirectory(userDataFolder);
-            CoreWebView2Environment environment = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
-            await webView.EnsureCoreWebView2Async(environment);
+            webViewEnvironment = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
+            await webView.EnsureCoreWebView2Async(webViewEnvironment);
 
             CoreWebView2 core = webView.CoreWebView2;
+            core.WebMessageReceived += (_, args) =>
+            {
+                try
+                {
+                    using JsonDocument message = JsonDocument.Parse(args.WebMessageAsJson);
+                    if (
+                        message.RootElement.TryGetProperty("type", out JsonElement type) &&
+                        type.GetString() == "rutracker-login"
+                    )
+                    {
+                        BeginInvoke(OpenRutrackerLogin);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AppendLauncherLog(launcherLog, "invalid web message", ex);
+                }
+            };
             core.NewWindowRequested += (_, args) =>
             {
                 args.Handled = true;
@@ -353,6 +375,40 @@ internal static class Program
             core.Navigate(url);
         }
 
+        private void OpenRutrackerLogin()
+        {
+            if (webViewEnvironment is null)
+            {
+                SendLoginMessage("rutracker-login-error", "Окно браузера еще не готово");
+                return;
+            }
+            if (rutrackerAuthForm is not null && !rutrackerAuthForm.IsDisposed)
+            {
+                rutrackerAuthForm.Activate();
+                return;
+            }
+
+            rutrackerAuthForm = new RutrackerAuthForm(webViewEnvironment, launcherLog);
+            rutrackerAuthForm.SessionSaved += (_, _) =>
+            {
+                SendLoginMessage("rutracker-login-saved", "Вход RuTracker сохранен");
+                rutrackerAuthForm = null;
+            };
+            rutrackerAuthForm.FormClosed += (_, _) => rutrackerAuthForm = null;
+            rutrackerAuthForm.Show(this);
+        }
+
+        private void SendLoginMessage(string type, string message)
+        {
+            if (webView.CoreWebView2 is null)
+            {
+                return;
+            }
+            webView.CoreWebView2.PostWebMessageAsJson(
+                JsonSerializer.Serialize(new { type, message })
+            );
+        }
+
         private static bool IsAppUrl(string value)
         {
             if (!Uri.TryCreate(value, UriKind.Absolute, out Uri? uri))
@@ -363,6 +419,163 @@ internal static class Program
             bool isLocalHost = uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase)
                 || uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase);
             return uri.Scheme == Uri.UriSchemeHttp && isLocalHost && uri.Port == 9876;
+        }
+    }
+
+    private sealed class RutrackerAuthForm : Form
+    {
+        private const string LoginUrl = "https://rutracker.org/forum/login.php";
+        private readonly CoreWebView2Environment environment;
+        private readonly string launcherLog;
+        private readonly WebView2 webView;
+        private bool didInitialize;
+        private bool savingSession;
+
+        public event EventHandler? SessionSaved;
+
+        public RutrackerAuthForm(CoreWebView2Environment environment, string launcherLog)
+        {
+            this.environment = environment;
+            this.launcherLog = launcherLog;
+            Text = "Вход в RuTracker";
+            StartPosition = FormStartPosition.CenterParent;
+            Size = new Size(980, 760);
+            MinimumSize = new Size(760, 560);
+
+            Icon? appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+            if (appIcon is not null)
+            {
+                Icon = appIcon;
+            }
+
+            webView = new WebView2
+            {
+                Dock = DockStyle.Fill,
+                AllowExternalDrop = false
+            };
+            Controls.Add(webView);
+        }
+
+        protected override async void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            if (didInitialize)
+            {
+                return;
+            }
+            didInitialize = true;
+            try
+            {
+                await webView.EnsureCoreWebView2Async(environment);
+                CoreWebView2 core = webView.CoreWebView2;
+                core.NavigationStarting += (_, args) =>
+                {
+                    if (IsRutrackerUrl(args.Uri) || args.Uri.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return;
+                    }
+                    args.Cancel = true;
+                    OpenExternalUrl(args.Uri);
+                };
+                core.NewWindowRequested += (_, args) =>
+                {
+                    args.Handled = true;
+                    if (IsRutrackerUrl(args.Uri))
+                    {
+                        core.Navigate(args.Uri);
+                    }
+                    else
+                    {
+                        OpenExternalUrl(args.Uri);
+                    }
+                };
+                core.NavigationCompleted += async (_, _) => await TrySaveAuthenticatedSession();
+                core.Navigate(LoginUrl);
+            }
+            catch (Exception ex)
+            {
+                AppendLauncherLog(launcherLog, "rutracker login window failed", ex);
+                MessageBox.Show(
+                    $"Не удалось открыть вход RuTracker:\n{ex.Message}",
+                    WindowTitle,
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning
+                );
+                Close();
+            }
+        }
+
+        private async Task TrySaveAuthenticatedSession()
+        {
+            if (savingSession || webView.CoreWebView2 is null)
+            {
+                return;
+            }
+            try
+            {
+                string result = await webView.CoreWebView2.ExecuteScriptAsync(
+                    "Boolean(document.querySelector('#logged-in-username, .logged-in-as-uname, a[href*=\"logout=1\"]'))"
+                );
+                if (!result.Equals("true", StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                savingSession = true;
+                IReadOnlyList<CoreWebView2Cookie> cookies = await webView.CoreWebView2.CookieManager.GetCookiesAsync(
+                    "https://rutracker.org/forum/"
+                );
+                var safeCookies = cookies
+                    .Where(cookie => cookie.Domain.TrimStart('.').Equals("rutracker.org", StringComparison.OrdinalIgnoreCase))
+                    .Select(cookie => new
+                    {
+                        name = cookie.Name,
+                        value = cookie.Value,
+                        domain = cookie.Domain,
+                        path = cookie.Path,
+                        secure = cookie.IsSecure
+                    })
+                    .ToArray();
+                if (safeCookies.Length == 0)
+                {
+                    throw new InvalidOperationException("RuTracker не выдал cookies сессии");
+                }
+
+                using HttpClient client = new() { Timeout = TimeSpan.FromSeconds(10) };
+                using StringContent content = new(
+                    JsonSerializer.Serialize(new { cookies = safeCookies }),
+                    Encoding.UTF8,
+                    "application/json"
+                );
+                using HttpResponseMessage response = await client.PostAsync(
+                    "http://127.0.0.1:9876/api/rutracker/session",
+                    content
+                );
+                response.EnsureSuccessStatusCode();
+                SessionSaved?.Invoke(this, EventArgs.Empty);
+                Close();
+            }
+            catch (Exception ex)
+            {
+                savingSession = false;
+                AppendLauncherLog(launcherLog, "rutracker session save failed", ex);
+                MessageBox.Show(
+                    $"Вход выполнен, но сессию не удалось сохранить:\n{ex.Message}",
+                    WindowTitle,
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning
+                );
+            }
+        }
+
+        private static bool IsRutrackerUrl(string value)
+        {
+            return Uri.TryCreate(value, UriKind.Absolute, out Uri? uri) &&
+                uri.Scheme == Uri.UriSchemeHttps &&
+                (
+                    uri.Host.Equals("rutracker.org", StringComparison.OrdinalIgnoreCase) ||
+                    uri.Host.EndsWith(".rutracker.org", StringComparison.OrdinalIgnoreCase)
+                );
         }
     }
 

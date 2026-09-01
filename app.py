@@ -17,7 +17,7 @@ import base64
 from dataclasses import dataclass
 from html import unescape
 from http import HTTPStatus
-from http.cookiejar import CookieJar
+from http.cookiejar import Cookie, CookieJar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import sys
@@ -256,6 +256,10 @@ class SearchResult:
 
 
 class TransientRuTrackerError(RuntimeError):
+    pass
+
+
+class RuTrackerAuthenticationRequiredError(RuntimeError):
     pass
 
 
@@ -1120,6 +1124,8 @@ class Database:
         return {
             "rutracker_username": self.get_setting("rutracker_username"),
             "has_rutracker_password": bool(self.get_setting("rutracker_password")),
+            "has_rutracker_session": bool(self.get_rutracker_session_cookies()),
+            "rutracker_auth_required": self.get_setting("rutracker_auth_required") == "1",
             "telegram_chat_id": self.get_setting("telegram_chat_id"),
             "has_telegram_bot_token": bool(self.get_setting("telegram_bot_token")),
             "default_min_seeders": self.get_setting_int("default_min_seeders", DEFAULT_MIN_SEEDERS),
@@ -1142,6 +1148,64 @@ class Database:
             self.get_setting("rutracker_username").strip()
             and self.get_setting("rutracker_password").strip()
         )
+
+    def has_rutracker_access(self) -> bool:
+        return bool(
+            self.get_setting("rutracker_auth_required") != "1"
+            and (self.get_rutracker_session_cookies() or self.has_rutracker_credentials())
+        )
+
+    def get_rutracker_session_cookies(self) -> list[dict[str, Any]]:
+        raw_value = self.get_setting("rutracker_session_cookies")
+        if not raw_value:
+            return []
+        try:
+            payload = json.loads(raw_value)
+        except (TypeError, ValueError):
+            return []
+        return payload if isinstance(payload, list) else []
+
+    def save_rutracker_session_cookies(self, cookies: Any) -> int:
+        if not isinstance(cookies, list):
+            raise ValueError("cookies must be a list")
+        normalized: list[dict[str, Any]] = []
+        for raw_cookie in cookies[:50]:
+            if not isinstance(raw_cookie, dict):
+                continue
+            name = str(raw_cookie.get("name") or "").strip()
+            value = str(raw_cookie.get("value") or "")
+            domain = str(raw_cookie.get("domain") or "").strip().lower()
+            path = str(raw_cookie.get("path") or "/").strip() or "/"
+            if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", name):
+                continue
+            if not value or len(value) > 8192:
+                continue
+            if domain.lstrip(".") != "rutracker.org":
+                continue
+            if not path.startswith("/"):
+                path = "/"
+            normalized.append(
+                {
+                    "name": name,
+                    "value": value,
+                    "domain": domain,
+                    "path": path,
+                    "secure": bool(raw_cookie.get("secure", True)),
+                }
+            )
+        if not normalized:
+            raise ValueError("RuTracker session cookies were not found")
+        self.set_setting(
+            "rutracker_session_cookies",
+            json.dumps(normalized, ensure_ascii=False, separators=(",", ":")),
+        )
+        self.set_setting("rutracker_auth_required", "0")
+        return len(normalized)
+
+    def mark_rutracker_auth_required(self, required: bool = True) -> None:
+        value = "1" if required else "0"
+        if self.get_setting("rutracker_auth_required") != value:
+            self.set_setting("rutracker_auth_required", value)
 
     def update_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
         allowed = set(SETTING_DEFAULTS)
@@ -1489,7 +1553,7 @@ class RuTrackerClient:
             urllib.request.HTTPCookieProcessor(self.cookie_jar)
         )
         self._logged_in = False
-        self._identity: tuple[str, str] | None = None
+        self._identity: tuple[str, str, str] | None = None
         self._lock = threading.Lock()
 
     def credentials(self) -> tuple[str, str]:
@@ -1498,8 +1562,14 @@ class RuTrackerClient:
             self.db.get_setting("rutracker_password"),
         )
 
-    def reset_session_if_needed(self, username: str, password: str) -> None:
-        identity = (username, password)
+    def reset_session_if_needed(
+        self,
+        username: str,
+        password: str,
+        browser_cookies: list[dict[str, Any]],
+    ) -> None:
+        serialized_cookies = json.dumps(browser_cookies, sort_keys=True, separators=(",", ":"))
+        identity = (username, password, serialized_cookies)
         if self._identity == identity:
             return
         self.cookie_jar = CookieJar()
@@ -1508,6 +1578,35 @@ class RuTrackerClient:
         )
         self._identity = identity
         self._logged_in = False
+        for raw_cookie in browser_cookies:
+            domain = str(raw_cookie.get("domain") or ".rutracker.org")
+            path = str(raw_cookie.get("path") or "/")
+            self.cookie_jar.set_cookie(
+                Cookie(
+                    version=0,
+                    name=str(raw_cookie["name"]),
+                    value=str(raw_cookie["value"]),
+                    port=None,
+                    port_specified=False,
+                    domain=domain,
+                    domain_specified=True,
+                    domain_initial_dot=domain.startswith("."),
+                    path=path,
+                    path_specified=True,
+                    secure=bool(raw_cookie.get("secure", True)),
+                    expires=None,
+                    discard=True,
+                    comment=None,
+                    comment_url=None,
+                    rest={},
+                    rfc2109=False,
+                )
+            )
+
+    def require_browser_login(self, message: str) -> RuTrackerAuthenticationRequiredError:
+        self._logged_in = False
+        self.db.mark_rutracker_auth_required()
+        return RuTrackerAuthenticationRequiredError(message)
 
     def request(
         self,
@@ -1589,23 +1688,42 @@ class RuTrackerClient:
 
     def login(self) -> None:
         username, password = self.credentials()
-        if not username or not password:
-            raise RuntimeError("RuTracker username and password are required in Settings")
+        browser_cookies = self.db.get_rutracker_session_cookies()
+        if self.db.get_setting("rutracker_auth_required") == "1":
+            raise RuTrackerAuthenticationRequiredError(
+                "Требуется вход в RuTracker через браузер приложения"
+            )
         with self._lock:
-            self.reset_session_if_needed(username, password)
+            self.reset_session_if_needed(username, password, browser_cookies)
             if self._logged_in:
                 return
-            html = self.request(
-                f"{RUTRACKER_BASE_URL}/login.php",
-                {
-                    "login_username": username,
-                    "login_password": password,
-                    "login": "Вход",
-                },
-            )
+            if browser_cookies:
+                self._logged_in = True
+                return
+            if not username or not password:
+                raise self.require_browser_login(
+                    "Требуется вход в RuTracker через браузер приложения"
+                )
+            try:
+                html = self.request(
+                    f"{RUTRACKER_BASE_URL}/login.php",
+                    {
+                        "login_username": username,
+                        "login_password": password,
+                        "login": "Вход",
+                    },
+                )
+            except urllib.error.HTTPError as exc:
+                if exc.code == HTTPStatus.FORBIDDEN:
+                    raise self.require_browser_login(
+                        "RuTracker заблокировал автоматический вход. Войдите через браузер приложения"
+                    ) from exc
+                raise
             self.raise_for_transient_page(html)
             if self.is_login_page(html):
-                raise RuntimeError("RuTracker login failed; check .env credentials")
+                raise self.require_browser_login(
+                    "RuTracker не принял логин. Войдите через браузер приложения"
+                )
             self._logged_in = True
 
     def search(self, query: str) -> list[SearchResult]:
@@ -1622,15 +1740,20 @@ class RuTrackerClient:
             if url in seen_urls:
                 break
             seen_urls.add(url)
-            html = self.request(url)
+            try:
+                html = self.request(url)
+            except urllib.error.HTTPError as exc:
+                if exc.code == HTTPStatus.FORBIDDEN:
+                    raise self.require_browser_login(
+                        "Сессия RuTracker недействительна. Войдите через браузер приложения"
+                    ) from exc
+                raise
             self.raise_for_transient_page(html)
             if self.is_login_page(html):
                 self._logged_in = False
-                self.login()
-                html = self.request(url)
-                self.raise_for_transient_page(html)
-                if self.is_login_page(html):
-                    raise TransientRuTrackerError("RuTracker returned login page during search")
+                raise self.require_browser_login(
+                    "Сессия RuTracker истекла. Войдите через браузер приложения"
+                )
 
             for result in parse_rutracker_results(html):
                 all_results[result.topic_id] = result
@@ -1640,6 +1763,7 @@ class RuTrackerClient:
                 break
             url = next_url
 
+        self.db.mark_rutracker_auth_required(False)
         return list(all_results.values())
 
     @staticmethod
@@ -1752,6 +1876,7 @@ class CheckerService:
         return {
             "item": item,
             "error": str(last_error) if last_error else "check failed",
+            "auth_required": isinstance(last_error, RuTrackerAuthenticationRequiredError),
             "attempts": used_attempts or 1,
             "new": 0,
             "matched": 0,
@@ -2726,8 +2851,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             request_path = urllib.parse.urlparse(self.path).path
 
             if request_path == "/api/items":
-                if not DB.has_rutracker_credentials():
-                    raise ValueError("Введите логин и пароль RuTracker перед добавлением фильма")
+                if not DB.has_rutracker_access():
+                    raise ValueError("Войдите в RuTracker через браузер приложения перед добавлением фильма")
                 item = DB.create_item(self.read_json())
                 item["initial_check_started"] = start_background_item_check(int(item["id"]))
                 self.send_json(item, 201)
@@ -2753,6 +2878,16 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if not session_id:
                     raise ValueError("session_id is required")
                 self.send_json({"active_ui_sessions": UI_SESSIONS.heartbeat(session_id)})
+                return
+
+            if request_path == "/api/rutracker/session":
+                saved = DB.save_rutracker_session_cookies(self.read_json().get("cookies"))
+                self.send_json(
+                    {
+                        "saved": saved,
+                        "config": DB.get_public_settings(),
+                    }
+                )
                 return
 
             if request_path == "/api/startup/install":
