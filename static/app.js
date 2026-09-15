@@ -174,7 +174,7 @@ function syncCheckPayload(payload = {}) {
   for (const result of payload.check_results || []) {
     rememberCheck(result);
   }
-  if (payload.check_all_summary) {
+  if (payload.check_all_summary && !payload.check_all_running) {
     rememberCheckAllSummary(payload.check_all_summary);
   }
   if ("check_all_running" in payload) {
@@ -954,11 +954,18 @@ async function refreshItemsForChecks() {
   try {
     const itemsPayload = await api("/api/items");
     syncCheckPayload(itemsPayload);
+    const nextConfig = itemsPayload.config || state.config;
+    const authStateChanged =
+      Boolean(state.config?.rutracker_auth_required) !== Boolean(nextConfig?.rutracker_auth_required) ||
+      Boolean(state.config?.has_rutracker_session) !== Boolean(nextConfig?.has_rutracker_session);
     state = {
       ...state,
       items: itemsPayload.items || [],
-      config: itemsPayload.config || state.config,
+      config: nextConfig,
     };
+    if (authStateChanged) {
+      applySettingsToForms();
+    }
     renderCheckAllButton();
     renderCards();
     if (wasCheckAllRunning && !checkAllRunning && lastCheckAllSummary) {
@@ -1003,6 +1010,10 @@ async function refreshItemsForPosters() {
     const previousItems = new Map((state.items || []).map((item) => [Number(item.id), item]));
     const itemsPayload = await api("/api/items");
     syncCheckPayload(itemsPayload);
+    const nextConfig = itemsPayload.config || state.config;
+    const authStateChanged =
+      Boolean(state.config?.rutracker_auth_required) !== Boolean(nextConfig?.rutracker_auth_required) ||
+      Boolean(state.config?.has_rutracker_session) !== Boolean(nextConfig?.has_rutracker_session);
     const changedItems = (itemsPayload.items || []).filter((item) => {
       const previous = previousItems.get(Number(item.id));
       return previous && (
@@ -1014,8 +1025,11 @@ async function refreshItemsForPosters() {
     state = {
       ...state,
       items: itemsPayload.items || [],
-      config: itemsPayload.config || state.config,
+      config: nextConfig,
     };
+    if (authStateChanged) {
+      applySettingsToForms();
+    }
     renderCards();
     queueDuplicateChecksForItems(changedItems);
     if (!needsPosterPolling()) {
