@@ -514,7 +514,16 @@ internal static class Program
             try
             {
                 string result = await webView.CoreWebView2.ExecuteScriptAsync(
-                    "Boolean(document.querySelector('#logged-in-username, .logged-in-as-uname, a[href*=\"logout=1\"]'))"
+                    "(() => {" +
+                    "const knownUserMarker = document.querySelector(" +
+                    "'#logged-in-username, .logged-in-as-uname, a[href*=\"logout\"], a[href*=\"mode=logout\"]'" +
+                    ");" +
+                    "const loginForm = document.querySelector(" +
+                    "'input[name=\"login_username\"], input[name=\"login_password\"], form[action*=\"login.php\"]'" +
+                    ");" +
+                    "const loginRoute = /\\/login\\.php$/i.test(location.pathname);" +
+                    "return Boolean(knownUserMarker || (!loginForm && !loginRoute));" +
+                    "})()"
                 );
                 if (!result.Equals("true", StringComparison.OrdinalIgnoreCase))
                 {

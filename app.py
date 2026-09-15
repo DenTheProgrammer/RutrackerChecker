@@ -1166,11 +1166,27 @@ class Database:
         return payload if isinstance(payload, list) else []
 
     def save_rutracker_session_cookies(self, cookies: Any, user_agent: Any = "") -> int:
-        if not isinstance(cookies, list):
-            raise ValueError("cookies must be a list")
+        normalized = self.normalize_rutracker_session_cookies(cookies)
+        normalized_user_agent = self.normalize_rutracker_user_agent(user_agent)
+        self.set_setting(
+            "rutracker_session_cookies",
+            json.dumps(normalized, ensure_ascii=False, separators=(",", ":")),
+        )
+        self.set_setting("rutracker_session_user_agent", normalized_user_agent)
+        self.set_setting("rutracker_auth_required", "0")
+        return len(normalized)
+
+    @staticmethod
+    def normalize_rutracker_user_agent(user_agent: Any) -> str:
         normalized_user_agent = str(user_agent or "").strip()
         if not normalized_user_agent or len(normalized_user_agent) > 1024:
             raise ValueError("RuTracker browser User-Agent was not provided")
+        return normalized_user_agent
+
+    @staticmethod
+    def normalize_rutracker_session_cookies(cookies: Any) -> list[dict[str, Any]]:
+        if not isinstance(cookies, list):
+            raise ValueError("cookies must be a list")
         normalized: list[dict[str, Any]] = []
         for raw_cookie in cookies[:50]:
             if not isinstance(raw_cookie, dict):
@@ -1198,13 +1214,7 @@ class Database:
             )
         if not normalized:
             raise ValueError("RuTracker session cookies were not found")
-        self.set_setting(
-            "rutracker_session_cookies",
-            json.dumps(normalized, ensure_ascii=False, separators=(",", ":")),
-        )
-        self.set_setting("rutracker_session_user_agent", normalized_user_agent)
-        self.set_setting("rutracker_auth_required", "0")
-        return len(normalized)
+        return normalized
 
     def mark_rutracker_auth_required(self, required: bool = True) -> None:
         value = "1" if required else "0"
@@ -1786,6 +1796,22 @@ class RuTrackerClient:
     @staticmethod
     def search_url(query: str) -> str:
         return build_rutracker_search_url(query)
+
+
+def validate_rutracker_session(cookies: Any, user_agent: Any) -> None:
+    normalized_cookies = Database.normalize_rutracker_session_cookies(cookies)
+    normalized_user_agent = Database.normalize_rutracker_user_agent(user_agent)
+    client = RuTrackerClient(DB)
+    client.reset_session_if_needed("", "", normalized_cookies, normalized_user_agent)
+    try:
+        html = client.request(f"{RUTRACKER_BASE_URL}/index.php")
+    except urllib.error.HTTPError as exc:
+        if exc.code == HTTPStatus.FORBIDDEN:
+            raise ValueError("RuTracker rejected the browser session") from exc
+        raise
+    client.raise_for_transient_page(html)
+    if client.is_login_page(html):
+        raise ValueError("RuTracker did not confirm the browser login")
 
 
 class TelegramNotifier:
@@ -2899,6 +2925,10 @@ class RequestHandler(BaseHTTPRequestHandler):
 
             if request_path == "/api/rutracker/session":
                 session_payload = self.read_json()
+                validate_rutracker_session(
+                    session_payload.get("cookies"),
+                    session_payload.get("user_agent"),
+                )
                 saved = DB.save_rutracker_session_cookies(
                     session_payload.get("cookies"),
                     session_payload.get("user_agent"),

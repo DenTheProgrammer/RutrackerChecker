@@ -874,7 +874,9 @@ class DatabaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / "app.db")
             db.mark_rutracker_auth_required()
-            with patch.object(app, "DB", db):
+            with patch.object(app, "DB", db), patch(
+                "app.validate_rutracker_session"
+            ) as validate_session:
                 server = ThreadingHTTPServer(("127.0.0.1", 0), RequestHandler)
                 thread = threading.Thread(target=server.serve_forever, daemon=True)
                 thread.start()
@@ -914,6 +916,7 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(payload["saved"], 1)
             self.assertTrue(payload["config"]["has_rutracker_session"])
             self.assertFalse(payload["config"]["rutracker_auth_required"])
+            validate_session.assert_called_once()
 
     def test_opening_ui_starts_metadata_backfill(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1618,6 +1621,36 @@ class DatabaseTests(unittest.TestCase):
             self.assertIn("bb_session=session-secret", request.get_header("Cookie"))
             self.assertEqual(client._request_user_agent, BROWSER_USER_AGENT)
             db.close()
+
+    def test_rutracker_browser_session_validation_rejects_login_page(self):
+        cookies = [
+            {
+                "name": "bb_session",
+                "value": "session-secret",
+                "domain": ".rutracker.org",
+                "path": "/forum/",
+                "secure": True,
+            }
+        ]
+        login_page = '<input name="login_username"><input name="login_password">'
+
+        with patch.object(RuTrackerClient, "request", return_value=login_page):
+            with self.assertRaisesRegex(ValueError, "did not confirm"):
+                app.validate_rutracker_session(cookies, BROWSER_USER_AGENT)
+
+    def test_rutracker_browser_session_validation_accepts_authenticated_page(self):
+        cookies = [
+            {
+                "name": "bb_session",
+                "value": "session-secret",
+                "domain": ".rutracker.org",
+                "path": "/forum/",
+                "secure": True,
+            }
+        ]
+
+        with patch.object(RuTrackerClient, "request", return_value="<html>tracker</html>"):
+            app.validate_rutracker_session(cookies, BROWSER_USER_AGENT)
 
     def test_rutracker_client_marks_missing_login_for_browser_prompt(self):
         with tempfile.TemporaryDirectory() as tmp:
