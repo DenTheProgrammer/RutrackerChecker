@@ -259,13 +259,25 @@ internal static class Program
 
     private sealed class BrowserForm : Form
     {
+        private static readonly TimeSpan ServerHeartbeatInterval = TimeSpan.FromSeconds(10);
+        private static readonly TimeSpan ServerHeartbeatTimeout = TimeSpan.FromSeconds(5);
         private readonly string url;
         private readonly string dataDir;
         private readonly string launcherLog;
         private readonly WebView2 webView;
+        private readonly CancellationTokenSource serverHeartbeatCancellation = new();
+        private readonly HttpClient serverHeartbeatClient = new(
+            new SocketsHttpHandler
+            {
+                UseProxy = false,
+                AllowAutoRedirect = false
+            }
+        );
+        private readonly string serverHeartbeatSessionId = $"launcher-{Guid.NewGuid():N}";
         private bool didInitialize;
         private CoreWebView2Environment? webViewEnvironment;
         private RutrackerAuthForm? rutrackerAuthForm;
+        private Task? serverHeartbeatTask;
 
         public BrowserForm(string url, string dataDir, string launcherLog)
         {
@@ -291,6 +303,7 @@ internal static class Program
                 AllowExternalDrop = false
             };
             Controls.Add(webView);
+            serverHeartbeatClient.Timeout = ServerHeartbeatTimeout;
         }
 
         protected override async void OnShown(EventArgs e)
@@ -302,6 +315,9 @@ internal static class Program
             }
 
             didInitialize = true;
+            serverHeartbeatTask = Task.Run(
+                () => RunServerHeartbeatLoop(serverHeartbeatCancellation.Token)
+            );
             try
             {
                 Task init = InitializeWebView();
@@ -323,6 +339,69 @@ internal static class Program
                 );
                 OpenExternalUrl(url);
                 BeginInvoke(Close);
+            }
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            serverHeartbeatCancellation.Cancel();
+            base.OnFormClosed(e);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                serverHeartbeatCancellation.Cancel();
+                try
+                {
+                    serverHeartbeatTask?.Wait(TimeSpan.FromSeconds(1));
+                }
+                catch (AggregateException)
+                {
+                }
+                serverHeartbeatClient.Dispose();
+                serverHeartbeatCancellation.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+
+        private async Task RunServerHeartbeatLoop(CancellationToken cancellationToken)
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    using StringContent content = new(
+                        JsonSerializer.Serialize(new { session_id = serverHeartbeatSessionId }),
+                        Encoding.UTF8,
+                        "application/json"
+                    );
+                    using HttpResponseMessage response = await serverHeartbeatClient.PostAsync(
+                        new Uri(new Uri(url), "api/heartbeat"),
+                        content,
+                        cancellationToken
+                    );
+                    response.EnsureSuccessStatusCode();
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch
+                {
+                    // The launcher startup path reports server failures. Keep the window responsive
+                    // here and retry in case the local server is still starting or restarting.
+                }
+
+                try
+                {
+                    await Task.Delay(ServerHeartbeatInterval, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
             }
         }
 
@@ -556,7 +635,12 @@ internal static class Program
                     throw new InvalidOperationException("Не удалось определить User-Agent окна RuTracker");
                 }
 
-                using HttpClient client = new() { Timeout = TimeSpan.FromSeconds(10) };
+                using SocketsHttpHandler handler = new()
+                {
+                    UseProxy = false,
+                    AllowAutoRedirect = false
+                };
+                using HttpClient client = new(handler) { Timeout = TimeSpan.FromSeconds(30) };
                 using StringContent content = new(
                     JsonSerializer.Serialize(new { cookies = safeCookies, user_agent = userAgent }),
                     Encoding.UTF8,
@@ -567,6 +651,7 @@ internal static class Program
                     content
                 );
                 response.EnsureSuccessStatusCode();
+                AppendLauncherLog(launcherLog, "rutracker session saved");
                 SessionSaved?.Invoke(this, EventArgs.Empty);
                 Close();
             }
