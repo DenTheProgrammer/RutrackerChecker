@@ -11,10 +11,9 @@ using System.Windows.Forms;
 
 internal static class Program
 {
-    private const string Url = "http://127.0.0.1:9876/";
     private const string AppHost = "127.0.0.1";
-    private const int AppPortNumber = 9876;
-    private const string AppPort = "9876";
+    private const int AppPortNumber = 19876;
+    private static readonly string Url = $"http://{AppHost}:{AppPortNumber}/";
     private const string RequiredVersion = "1.5.1";
     private const string WindowTitle = "RuTracker Checker";
     private const string UiMutexName = @"Local\RutrackerChecker.Ui";
@@ -118,7 +117,7 @@ internal static class Program
             if (state.IsUp)
             {
                 MessageBox.Show(
-                    "Port 9876 is already used by another local service, so RuTracker Release Checker cannot start.\n\nClose that process or free http://127.0.0.1:9876/, then try again.",
+                    $"Port {AppPortNumber} is already used by another local service, so RuTracker Release Checker cannot start.\n\nClose that process or free {Url}, then try again.",
                     "RuTracker Release Checker",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning
@@ -155,7 +154,7 @@ internal static class Program
                     Environment =
                     {
                         ["APP_HOST"] = AppHost,
-                        ["APP_PORT"] = AppPort
+                        ["APP_PORT"] = AppPortNumber.ToString()
                     }
                 });
             }
@@ -174,7 +173,7 @@ internal static class Program
             if (!WaitForServer())
             {
                 MessageBox.Show(
-                    "The local server did not start on http://127.0.0.1:9876/.\n\nDiagnostics were written to:\n" +
+                    $"The local server did not start on {Url}.\n\nDiagnostics were written to:\n" +
                     launcherLog + "\n" +
                     stdoutLog + "\n" +
                     stderrLog,
@@ -497,7 +496,7 @@ internal static class Program
 
             bool isLocalHost = uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase)
                 || uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase);
-            return uri.Scheme == Uri.UriSchemeHttp && isLocalHost && uri.Port == 9876;
+            return uri.Scheme == Uri.UriSchemeHttp && isLocalHost && uri.Port == AppPortNumber;
         }
     }
 
@@ -647,7 +646,7 @@ internal static class Program
                     "application/json"
                 );
                 using HttpResponseMessage response = await client.PostAsync(
-                    "http://127.0.0.1:9876/api/rutracker/session",
+                    Url + "api/rutracker/session",
                     content
                 );
                 response.EnsureSuccessStatusCode();

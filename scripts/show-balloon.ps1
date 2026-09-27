@@ -11,7 +11,7 @@ Add-Type -AssemblyName System.Drawing
 
 $Root = Split-Path -Parent $PSScriptRoot
 $Launcher = Join-Path $Root "RutrackerChecker.exe"
-$UiUrl = "http://127.0.0.1:9876/"
+$UiUrl = "http://127.0.0.1:19876/"
 $script:OpenedUi = $false
 
 function Open-CheckerUi {

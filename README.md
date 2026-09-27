@@ -6,7 +6,7 @@ The app stores state in SQLite, shows `N new` counters per query, and can show W
 
 ## Quick Start
 
-Double-click `RutrackerChecker.exe` if it is present in this folder. It starts the local server and opens the UI in a native app window. The same UI is still available at http://127.0.0.1:9876/ for manual debugging. When you close all UI windows or browser tabs, the local server stops automatically after the idle grace period.
+Double-click `RutrackerChecker.exe` if it is present in this folder. It starts the local server and opens the UI in a native app window. The same UI is still available at http://127.0.0.1:19876/ for manual debugging. When you close all UI windows or browser tabs, the local server stops automatically after the idle grace period.
 
 On first launch, click `Sign in through browser` and complete the RuTracker login in the native WebView2 window. The app stores only the resulting RuTracker session cookies in `data/app.db`; if the session expires or RuTracker rejects it, the UI asks for another browser login and retries the checks. Username/password settings remain available as a compatibility fallback.
 
@@ -16,7 +16,7 @@ If the launcher is not present, start the app from PowerShell:
 .\run.ps1
 ```
 
-Open http://127.0.0.1:9876.
+Open http://127.0.0.1:19876.
 
 ## Optional .env Setup
 
