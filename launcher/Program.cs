@@ -12,8 +12,10 @@ using System.Windows.Forms;
 internal static class Program
 {
     private const string AppHost = "127.0.0.1";
-    private const int AppPortNumber = 19876;
-    private static readonly string Url = $"http://{AppHost}:{AppPortNumber}/";
+    private const int DefaultAppPortNumber = 19876;
+    private static readonly string AppPortFile = Path.Combine(AppContext.BaseDirectory, "data", "server-port.txt");
+    private static int AppPortNumber = DefaultAppPortNumber;
+    private static string Url => $"http://{AppHost}:{AppPortNumber}/";
     private const string RequiredVersion = "1.5.1";
     private const string WindowTitle = "RuTracker Checker";
     private const string UiMutexName = @"Local\RutrackerChecker.Ui";
@@ -42,7 +44,8 @@ internal static class Program
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
-        bool serverOnly = args.Any(arg => arg.Equals("--server-only", StringComparison.OrdinalIgnoreCase));
+        bool refreshAuth = args.Any(arg => arg.Equals("--refresh-auth", StringComparison.OrdinalIgnoreCase));
+        bool serverOnly = refreshAuth || args.Any(arg => arg.Equals("--server-only", StringComparison.OrdinalIgnoreCase));
         string appDir = AppContext.BaseDirectory;
         string appPath = Path.Combine(appDir, "app.py");
         string dataDir = Path.Combine(appDir, "data");
@@ -53,17 +56,21 @@ internal static class Program
 
         AppendLauncherLog(
             launcherLog,
-            $"started pid={Environment.ProcessId} serverOnly={serverOnly}"
+            $"started pid={Environment.ProcessId} serverOnly={serverOnly} refreshAuth={refreshAuth}"
         );
 
         if (!File.Exists(appPath))
         {
-            MessageBox.Show(
-                $"app.py was not found next to the launcher:\n{appPath}",
-                "RuTracker Release Checker",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error
-            );
+            if (!refreshAuth)
+            {
+                MessageBox.Show(
+                    $"app.py was not found next to the launcher:\n{appPath}",
+                    "RuTracker Release Checker",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
+            Environment.ExitCode = 1;
             return;
         }
 
@@ -92,7 +99,10 @@ internal static class Program
 
         try
         {
-            PromptForDesktopShortcutIfNeeded(appDir, dataDir, launcherLog);
+            if (!refreshAuth)
+            {
+                PromptForDesktopShortcutIfNeeded(appDir, dataDir, launcherLog);
+            }
 
             ServerState state = GetServerState();
             AppendLauncherLog(
@@ -101,6 +111,11 @@ internal static class Program
             );
             if (state.IsChecker)
             {
+                if (refreshAuth)
+                {
+                    Environment.ExitCode = RefreshAuthSilently(dataDir, launcherLog);
+                    return;
+                }
                 StartTrayIfBackgroundEnabled(appDir, state.BackgroundEnabled);
                 if (!serverOnly)
                 {
@@ -116,24 +131,23 @@ internal static class Program
 
             if (state.IsUp)
             {
-                MessageBox.Show(
-                    $"Port {AppPortNumber} is already used by another local service, so RuTracker Release Checker cannot start.\n\nClose that process or free {Url}, then try again.",
-                    "RuTracker Release Checker",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning
-                );
-                return;
+                AppendLauncherLog(launcherLog, $"port {AppPortNumber} is occupied by another service; selecting a free port");
             }
 
             PythonCommand? python = FindPython();
             if (python is null)
             {
-                MessageBox.Show(
-                    "Python was not found. Install Python 3.11+ or run .\\run.ps1 from the project folder.",
-                    "RuTracker Release Checker",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error
-                );
+                AppendLauncherLog(launcherLog, "Python was not found");
+                if (!refreshAuth)
+                {
+                    MessageBox.Show(
+                        "Python was not found. Install Python 3.11+ or run .\\run.ps1 from the project folder.",
+                        "RuTracker Release Checker",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error
+                    );
+                }
+                Environment.ExitCode = 1;
                 return;
             }
 
@@ -153,38 +167,51 @@ internal static class Program
                     WindowStyle = ProcessWindowStyle.Hidden,
                     Environment =
                     {
-                        ["APP_HOST"] = AppHost,
-                        ["APP_PORT"] = AppPortNumber.ToString()
+                        ["APP_HOST"] = AppHost
                     }
                 });
             }
             catch (Exception ex)
             {
                 AppendLauncherLog(launcherLog, "start failed", ex);
-                MessageBox.Show(
-                    $"Could not start the local server:\n{ex.Message}",
-                    "RuTracker Release Checker",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error
-                );
+                if (!refreshAuth)
+                {
+                    MessageBox.Show(
+                        $"Could not start the local server:\n{ex.Message}",
+                        "RuTracker Release Checker",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error
+                    );
+                }
+                Environment.ExitCode = 1;
                 return;
             }
 
             if (!WaitForServer())
             {
-                MessageBox.Show(
-                    $"The local server did not start on {Url}.\n\nDiagnostics were written to:\n" +
-                    launcherLog + "\n" +
-                    stdoutLog + "\n" +
-                    stderrLog,
-                    "RuTracker Release Checker",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning
-                );
+                AppendLauncherLog(launcherLog, "local server did not start");
+                if (!refreshAuth)
+                {
+                    MessageBox.Show(
+                        $"The local server did not start on {Url}.\n\nDiagnostics were written to:\n" +
+                        launcherLog + "\n" +
+                        stdoutLog + "\n" +
+                        stderrLog,
+                        "RuTracker Release Checker",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning
+                    );
+                }
+                Environment.ExitCode = 1;
                 return;
             }
 
             state = GetServerState();
+            if (refreshAuth)
+            {
+                Environment.ExitCode = RefreshAuthSilently(dataDir, launcherLog);
+                return;
+            }
             StartTrayIfBackgroundEnabled(appDir, state.BackgroundEnabled);
             if (!serverOnly)
             {
@@ -209,6 +236,21 @@ internal static class Program
                 }
                 uiMutex.Dispose();
             }
+        }
+    }
+
+    private static int RefreshAuthSilently(string dataDir, string launcherLog)
+    {
+        try
+        {
+            using RutrackerAuthForm form = new(null, dataDir, launcherLog, silent: true);
+            Application.Run(form);
+            return form.WasSessionSaved() ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            AppendLauncherLog(launcherLog, "automatic RuTracker login failed", ex);
+            return 1;
         }
     }
 
@@ -274,6 +316,7 @@ internal static class Program
         );
         private readonly string serverHeartbeatSessionId = $"launcher-{Guid.NewGuid():N}";
         private bool didInitialize;
+        private bool heartbeatDisposed;
         private CoreWebView2Environment? webViewEnvironment;
         private RutrackerAuthForm? rutrackerAuthForm;
         private Task? serverHeartbeatTask;
@@ -343,14 +386,18 @@ internal static class Program
 
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
-            serverHeartbeatCancellation.Cancel();
+            if (!heartbeatDisposed)
+            {
+                serverHeartbeatCancellation.Cancel();
+            }
             base.OnFormClosed(e);
         }
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing)
+            if (disposing && !heartbeatDisposed)
             {
+                heartbeatDisposed = true;
                 serverHeartbeatCancellation.Cancel();
                 try
                 {
@@ -466,7 +513,7 @@ internal static class Program
                 return;
             }
 
-            rutrackerAuthForm = new RutrackerAuthForm(webViewEnvironment, launcherLog);
+            rutrackerAuthForm = new RutrackerAuthForm(webViewEnvironment, dataDir, launcherLog);
             rutrackerAuthForm.SessionSaved += (_, _) =>
             {
                 SendLoginMessage("rutracker-login-saved", "Вход RuTracker сохранен");
@@ -503,22 +550,41 @@ internal static class Program
     private sealed class RutrackerAuthForm : Form
     {
         private const string LoginUrl = "https://rutracker.org/forum/login.php";
-        private readonly CoreWebView2Environment environment;
+        private readonly CoreWebView2Environment? environment;
+        private readonly string dataDir;
         private readonly string launcherLog;
+        private readonly bool silent;
         private readonly WebView2 webView;
+        private readonly System.Windows.Forms.Timer? silentTimeout;
         private bool didInitialize;
         private bool savingSession;
+        private bool sessionWasSaved;
 
         public event EventHandler? SessionSaved;
+        public bool WasSessionSaved() => sessionWasSaved;
 
-        public RutrackerAuthForm(CoreWebView2Environment environment, string launcherLog)
+        public RutrackerAuthForm(CoreWebView2Environment? environment, string dataDir, string launcherLog, bool silent = false)
         {
             this.environment = environment;
+            this.dataDir = dataDir;
             this.launcherLog = launcherLog;
+            this.silent = silent;
             Text = "Вход в RuTracker";
-            StartPosition = FormStartPosition.CenterParent;
+            StartPosition = silent ? FormStartPosition.CenterScreen : FormStartPosition.CenterParent;
             Size = new Size(980, 760);
             MinimumSize = new Size(760, 560);
+            ShowInTaskbar = !silent;
+            Opacity = silent ? 0 : 1;
+
+            if (silent)
+            {
+                silentTimeout = new System.Windows.Forms.Timer { Interval = 35000 };
+                silentTimeout.Tick += (_, _) =>
+                {
+                    AppendLauncherLog(launcherLog, "automatic RuTracker login timed out");
+                    Close();
+                };
+            }
 
             Icon? appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             if (appIcon is not null)
@@ -534,6 +600,8 @@ internal static class Program
             Controls.Add(webView);
         }
 
+        protected override bool ShowWithoutActivation => silent;
+
         protected override async void OnShown(EventArgs e)
         {
             base.OnShown(e);
@@ -542,9 +610,12 @@ internal static class Program
                 return;
             }
             didInitialize = true;
+            silentTimeout?.Start();
             try
             {
-                await webView.EnsureCoreWebView2Async(environment);
+                CoreWebView2Environment selectedEnvironment = environment
+                    ?? await CoreWebView2Environment.CreateAsync(null, Path.Combine(dataDir, "webview2"));
+                await webView.EnsureCoreWebView2Async(selectedEnvironment);
                 CoreWebView2 core = webView.CoreWebView2;
                 core.NavigationStarting += (_, args) =>
                 {
@@ -573,14 +644,24 @@ internal static class Program
             catch (Exception ex)
             {
                 AppendLauncherLog(launcherLog, "rutracker login window failed", ex);
-                MessageBox.Show(
-                    $"Не удалось открыть вход RuTracker:\n{ex.Message}",
-                    WindowTitle,
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning
-                );
+                if (!silent)
+                {
+                    MessageBox.Show(
+                        $"Не удалось открыть вход RuTracker:\n{ex.Message}",
+                        WindowTitle,
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning
+                    );
+                }
                 Close();
             }
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            silentTimeout?.Stop();
+            silentTimeout?.Dispose();
+            base.OnFormClosed(e);
         }
 
         private async Task TrySaveAuthenticatedSession()
@@ -651,6 +732,7 @@ internal static class Program
                 );
                 response.EnsureSuccessStatusCode();
                 AppendLauncherLog(launcherLog, "rutracker session saved");
+                sessionWasSaved = true;
                 SessionSaved?.Invoke(this, EventArgs.Empty);
                 Close();
             }
@@ -658,12 +740,19 @@ internal static class Program
             {
                 savingSession = false;
                 AppendLauncherLog(launcherLog, "rutracker session save failed", ex);
-                MessageBox.Show(
-                    $"Вход выполнен, но сессию не удалось сохранить:\n{ex.Message}",
-                    WindowTitle,
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning
-                );
+                if (silent)
+                {
+                    Close();
+                }
+                else
+                {
+                    MessageBox.Show(
+                        $"Вход выполнен, но сессию не удалось сохранить:\n{ex.Message}",
+                        WindowTitle,
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning
+                    );
+                }
             }
         }
 
@@ -1053,22 +1142,6 @@ internal static class Program
         }
     }
 
-    private static bool ReadJsonBool(string body, string name)
-    {
-        string marker = "\"" + name + "\":";
-        int index = body.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-        if (index < 0)
-        {
-            return false;
-        }
-        int valueStart = index + marker.Length;
-        while (valueStart < body.Length && char.IsWhiteSpace(body[valueStart]))
-        {
-            valueStart++;
-        }
-        return body.Substring(valueStart).StartsWith("true", StringComparison.OrdinalIgnoreCase);
-    }
-
     private static PythonCommand? FindPython()
     {
         string? explicitPython = Environment.GetEnvironmentVariable("RUTRACKER_CHECKER_PYTHON");
@@ -1163,6 +1236,7 @@ internal static class Program
 
     private static ServerState GetServerState()
     {
+        AppPortNumber = ReadAppPortNumber();
         if (!IsLocalPortOpen())
         {
             return new ServerState(false, false, "", false);
@@ -1190,24 +1264,47 @@ internal static class Program
                 return new ServerState(true, false, "", false);
             }
 
-            string body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
-            string marker = "\"version\":";
-            int index = body.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-            if (index < 0)
+            using JsonDocument document = JsonDocument.Parse(
+                response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+            );
+            JsonElement root = document.RootElement;
+            if (
+                !root.TryGetProperty("app", out JsonElement appName) ||
+                appName.GetString() != "RutrackerChecker"
+            )
             {
                 return new ServerState(true, false, "", false);
             }
-            int quoteStart = body.IndexOf('"', index + marker.Length);
-            int quoteEnd = quoteStart >= 0 ? body.IndexOf('"', quoteStart + 1) : -1;
-            string version = quoteStart >= 0 && quoteEnd > quoteStart
-                ? body.Substring(quoteStart + 1, quoteEnd - quoteStart - 1)
+            string version = root.TryGetProperty("version", out JsonElement versionValue)
+                ? versionValue.GetString() ?? ""
                 : "";
-            return new ServerState(true, true, version, ReadJsonBool(body, "background_enabled"));
+            bool backgroundEnabled = root.TryGetProperty("background_enabled", out JsonElement backgroundValue)
+                && backgroundValue.ValueKind == JsonValueKind.True;
+            return new ServerState(true, true, version, backgroundEnabled);
         }
         catch
         {
             return new ServerState(false, false, "", false);
         }
+    }
+
+    private static int ReadAppPortNumber()
+    {
+        try
+        {
+            string value = File.ReadAllText(AppPortFile).Trim();
+            if (int.TryParse(value, out int port) && port is >= 1024 and <= 65535)
+            {
+                return port;
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+        return DefaultAppPortNumber;
     }
 
     private static bool WaitForExistingWindow()

@@ -1,5 +1,9 @@
 $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
+$RootLink = Get-Item -LiteralPath $Root
+if ($RootLink.LinkType -eq "Junction" -and $RootLink.Target) {
+    $Root = [string]$RootLink.Target
+}
 $BundledPython = Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
 $Python = $null
 

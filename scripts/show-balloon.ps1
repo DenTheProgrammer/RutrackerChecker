@@ -11,7 +11,7 @@ Add-Type -AssemblyName System.Drawing
 
 $Root = Split-Path -Parent $PSScriptRoot
 $Launcher = Join-Path $Root "RutrackerChecker.exe"
-$UiUrl = "http://127.0.0.1:19876/"
+. (Join-Path $PSScriptRoot "Get-AppUrl.ps1")
 $script:OpenedUi = $false
 
 function Open-CheckerUi {
@@ -25,7 +25,7 @@ function Open-CheckerUi {
         return
     }
 
-    Start-Process $UiUrl
+    Start-Process (Get-AppUrl -Root $Root)
 }
 
 $notify = New-Object System.Windows.Forms.NotifyIcon

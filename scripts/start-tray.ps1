@@ -5,12 +5,16 @@ Add-Type -AssemblyName System.Drawing
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Root = Split-Path -Parent $ScriptDir
+$RootLink = Get-Item -LiteralPath $Root
+if ($RootLink.LinkType -eq "Junction" -and $RootLink.Target) {
+    $Root = [string]$RootLink.Target
+}
 $AssetsDir = Join-Path $Root "assets"
 $BaseIconPath = Join-Path $AssetsDir "app-icon.png"
 $DataDir = Join-Path $Root "data"
 $RuntimeStatusPath = Join-Path $DataDir "runtime_status.json"
 $AppExe = Join-Path $Root "RutrackerChecker.exe"
-$AppUrl = "http://127.0.0.1:19876/"
+. (Join-Path $PSScriptRoot "Get-AppUrl.ps1")
 $BundledPython = Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
 $Python = $null
 $TrayMutexName = "Local\RutrackerCheckerTray"
@@ -137,7 +141,7 @@ function Open-Ui {
     if (Test-Path $AppExe) {
         Start-Process -FilePath $AppExe -WorkingDirectory $Root
     } else {
-        Start-Process $AppUrl
+        Start-Process (Get-AppUrl -Root $Root)
     }
 }
 
@@ -197,7 +201,7 @@ function Stop-AppProcesses {
 
 function Exit-App {
     try {
-        Invoke-RestMethod -Method Post -Uri "$($AppUrl)api/shutdown" -TimeoutSec 2 | Out-Null
+        Invoke-RestMethod -Method Post -Uri "$(Get-AppUrl -Root $Root)api/shutdown" -TimeoutSec 2 | Out-Null
         Start-Sleep -Milliseconds 500
     } catch {
     }

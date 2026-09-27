@@ -6,9 +6,9 @@ The app stores state in SQLite, shows `N new` counters per query, and can show W
 
 ## Quick Start
 
-Double-click `RutrackerChecker.exe` if it is present in this folder. It starts the local server and opens the UI in a native app window. The same UI is still available at http://127.0.0.1:19876/ for manual debugging. When you close all UI windows or browser tabs, the local server stops automatically after the idle grace period.
+Double-click `RutrackerChecker.exe` if it is present in this folder. It starts the local server and opens the UI in a native app window. The server prefers port 19876 and automatically selects a free local port if that port is occupied. The current port is stored in `data/server-port.txt`. When you close all UI windows or browser tabs, the local server stops automatically after the idle grace period.
 
-On first launch, click `Sign in through browser` and complete the RuTracker login in the native WebView2 window. The app stores only the resulting RuTracker session cookies in `data/app.db`; if the session expires or RuTracker rejects it, the UI asks for another browser login and retries the checks. Username/password settings remain available as a compatibility fallback.
+On first launch, click `Sign in through browser` and complete the RuTracker login in the native WebView2 window. The app stores only the resulting RuTracker session cookies in `data/app.db`. If the session expires, the background checker first tries to restore it silently from the saved WebView2 profile; an open app also starts the browser login window automatically. If RuTracker requires user interaction, complete that login in the window. Username/password settings remain available as a compatibility fallback.
 
 If the launcher is not present, start the app from PowerShell:
 
@@ -16,7 +16,7 @@ If the launcher is not present, start the app from PowerShell:
 .\run.ps1
 ```
 
-Open http://127.0.0.1:19876.
+Open `http://127.0.0.1:<port>/`, using the port in `data/server-port.txt` (normally 19876).
 
 ## Optional .env Setup
 
@@ -84,7 +84,7 @@ Updates are intentionally blocked when the working tree has uncommitted changes,
 - `CHECK_ALL_MAX_WORKERS`: simultaneous RuTracker requests for the manual "check all" action; default is `8`. All enabled cards enter the checking state immediately, but requests are limited to this worker count.
 - `AUTO_SHUTDOWN_WHEN_IDLE`: `1` stops the server after all UI tabs are closed.
 - `AUTO_SHUTDOWN_GRACE_SECONDS`: idle close delay; default is `45`.
-- `APP_HOST` and `APP_PORT`: local server address.
+- `APP_HOST` and `APP_PORT`: local server address and preferred port. If the port is occupied, the server selects a free port and records it in `data/server-port.txt`.
 
 ## Tests
 
@@ -97,5 +97,5 @@ The tests cover RuTracker HTML parsing, filtering, SQLite idempotency, reset beh
 ## Build Launcher
 
 ```powershell
-dotnet publish .\launcher\RutrackerChecker.Launcher.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o .
+dotnet publish .\launcher\RutrackerChecker.Launcher.csproj -c Release --self-contained false -p:UseAppHost=true -o .
 ```

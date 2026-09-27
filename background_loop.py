@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -14,6 +15,7 @@ from app import DB, DEFAULT_CHECK_INTERVAL_MINUTES, UPDATE_SERVICE
 DATA_DIR = Path(__file__).resolve().parent / "data"
 LOG_PATH = DATA_DIR / "checks.log"
 RUNTIME_STATUS_PATH = DATA_DIR / "runtime_status.json"
+LAUNCHER_PATH = DATA_DIR.parent / "RutrackerChecker.exe"
 
 
 def utc_now() -> dt.datetime:
@@ -102,6 +104,40 @@ def run_check_with_heartbeat() -> None:
         raise error
 
 
+def refresh_rutracker_session_if_required() -> bool:
+    if DB.get_setting("rutracker_auth_required") != "1":
+        return False
+    if not DB.get_rutracker_session_cookies() or not LAUNCHER_PATH.exists():
+        return False
+
+    write_runtime_status(status="refreshing_auth", next_check_at=None)
+    try:
+        result = subprocess.run(
+            [str(LAUNCHER_PATH), "--refresh-auth"],
+            cwd=DATA_DIR.parent,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=60,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"Automatic RuTracker login failed: {exc}")
+        return False
+    return result.returncode == 0 and DB.get_setting("rutracker_auth_required") != "1"
+
+
+def run_check_with_auth_refresh() -> bool:
+    if DB.get_setting("rutracker_auth_required") == "1" and not refresh_rutracker_session_if_required():
+        return False
+
+    run_check_with_heartbeat()
+    if DB.get_setting("rutracker_auth_required") == "1":
+        if not refresh_rutracker_session_if_required():
+            return False
+        run_check_with_heartbeat()
+    return DB.get_setting("rutracker_auth_required") != "1"
+
+
 def refresh_update_status() -> None:
     try:
         UPDATE_SERVICE.get_status(force_fetch=False)
@@ -133,14 +169,17 @@ def main() -> int:
 
         try:
             write_runtime_status(status="checking", next_check_at=None)
-            run_check_with_heartbeat()
+            auth_ok = run_check_with_auth_refresh()
             refresh_update_status()
             next_check_at = utc_now() + dt.timedelta(seconds=interval_seconds)
             write_runtime_status(
                 status="waiting",
                 last_check_at=iso_now(),
-                last_check_status="ok",
-                last_check_message="Last automatic check finished",
+                last_check_status="ok" if auth_ok else "auth_required",
+                last_check_message=(
+                    "Last automatic check finished"
+                    if auth_ok else "Waiting for RuTracker browser login"
+                ),
                 next_check_at=next_check_at.isoformat(),
             )
         except Exception as exc:

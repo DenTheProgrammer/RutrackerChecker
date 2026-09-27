@@ -27,6 +27,7 @@ from typing import Any, Callable
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "app.db"
+PORT_FILE = DATA_DIR / "server-port.txt"
 STATIC_DIR = BASE_DIR / "static"
 ASSETS_DIR = BASE_DIR / "assets"
 TRAY_SCRIPT_PATH = BASE_DIR / "scripts" / "start-tray.ps1"
@@ -2842,6 +2843,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 runtime = read_runtime_status()
                 self.send_json(
                     {
+                        "app": "RutrackerChecker",
                         "ok": True,
                         "version": APP_VERSION,
                         "background_enabled": runtime["background_enabled"],
@@ -3053,15 +3055,39 @@ def idle_shutdown_loop() -> None:
             return
 
 
+def create_http_server(
+    host: str = APP_HOST,
+    preferred_port: int = APP_PORT,
+    port_file: Path = PORT_FILE,
+) -> ThreadingHTTPServer:
+    try:
+        httpd = ThreadingHTTPServer((host, preferred_port), RequestHandler)
+    except OSError as exc:
+        if preferred_port == 0:
+            raise
+        httpd = ThreadingHTTPServer((host, 0), RequestHandler)
+        print(f"Port {preferred_port} is unavailable ({exc}); using port {httpd.server_port}")
+
+    try:
+        port_file.parent.mkdir(parents=True, exist_ok=True)
+        temporary_file = port_file.with_name(f"{port_file.name}.{os.getpid()}.tmp")
+        temporary_file.write_text(str(httpd.server_port), encoding="ascii")
+        temporary_file.replace(port_file)
+    except OSError:
+        httpd.server_close()
+        raise
+    return httpd
+
+
 def main() -> None:
     global SERVER
+    httpd = create_http_server()
+    SERVER = httpd
     scheduler = threading.Thread(target=scheduler_loop, daemon=True)
     scheduler.start()
     idle_shutdown = threading.Thread(target=idle_shutdown_loop, daemon=True)
     idle_shutdown.start()
-    httpd = ThreadingHTTPServer((APP_HOST, APP_PORT), RequestHandler)
-    SERVER = httpd
-    print(f"RuTracker Release Checker running at http://{APP_HOST}:{APP_PORT}")
+    print(f"RuTracker Release Checker running at http://{APP_HOST}:{httpd.server_port}")
     print("Press Ctrl+C to stop.")
     start_tray_if_background_enabled()
     try:

@@ -15,7 +15,8 @@ $ProtocolName = "rutrackerchecker"
 $ProtocolUri = "${ProtocolName}://open"
 $AppId = "RuTrackerChecker.Local"
 $FallbackAppId = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe"
-$UiUrl = "http://127.0.0.1:19876/"
+. (Join-Path $PSScriptRoot "Get-AppUrl.ps1")
+$UiUrl = Get-AppUrl -Root $Root
 
 function Escape-Xml {
     param([string]$Value)

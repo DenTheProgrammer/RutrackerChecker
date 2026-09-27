@@ -71,6 +71,7 @@ let duplicateCheckInFlight = false;
 let pendingDuplicateResolve = null;
 let duplicateInitialSweepDone = false;
 let startupInstallInFlight = false;
+let autoLoginAttempted = false;
 
 const POSTER_POLL_INTERVAL_MS = 3000;
 const POSTER_POLL_DURATION_MS = 60000;
@@ -299,6 +300,22 @@ function requestRutrackerLogin() {
   window.chrome.webview.postMessage({ type: "rutracker-login" });
 }
 
+function restoreRutrackerSessionIfNeeded() {
+  if (!state.config?.rutracker_auth_required) {
+    autoLoginAttempted = false;
+    return;
+  }
+  if (
+    autoLoginAttempted ||
+    !window.chrome?.webview ||
+    !state.config?.has_rutracker_session
+  ) return;
+  autoLoginAttempted = true;
+  setTimeout(() => {
+    if (state.config?.rutracker_auth_required) requestRutrackerLogin();
+  }, 0);
+}
+
 async function handleRutrackerLoginSaved() {
   setSettingsStatus("Вход сохранен. Повторяем проверку...");
   await load();
@@ -360,6 +377,7 @@ function applySettingsToForms() {
     : "Обязательно";
   credentialGate.hidden = hasCredentials() && !authRequired;
   isHydratingSettings = false;
+  restoreRutrackerSessionIfNeeded();
 }
 
 function renderRuntime() {

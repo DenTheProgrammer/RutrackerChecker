@@ -1,5 +1,6 @@
 import base64
 import json
+import socket
 import subprocess
 import tempfile
 import threading
@@ -14,6 +15,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import app
+import background_loop
 from check_once import build_notification
 from app import (
     CheckerService,
@@ -68,6 +70,42 @@ BROWSER_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0"
 )
+
+
+class StartupTests(unittest.TestCase):
+    def test_server_uses_free_port_when_preferred_port_is_occupied(self):
+        with tempfile.TemporaryDirectory() as tmp, socket.socket() as blocker:
+            blocker.bind(("127.0.0.1", 0))
+            blocker.listen()
+            occupied_port = blocker.getsockname()[1]
+            port_file = Path(tmp) / "server-port.txt"
+
+            server = app.create_http_server("127.0.0.1", occupied_port, port_file)
+            try:
+                self.assertNotEqual(server.server_port, occupied_port)
+                self.assertEqual(port_file.read_text(encoding="ascii"), str(server.server_port))
+            finally:
+                server.server_close()
+
+    def test_background_check_retries_after_automatic_login(self):
+        auth = {"required": False}
+        checks = []
+
+        def check() -> None:
+            checks.append(1)
+            if len(checks) == 1:
+                auth["required"] = True
+
+        def refresh() -> bool:
+            auth["required"] = False
+            return True
+
+        with patch.object(background_loop.DB, "get_setting", side_effect=lambda _: "1" if auth["required"] else "0"), \
+             patch.object(background_loop, "run_check_with_heartbeat", side_effect=check), \
+             patch.object(background_loop, "refresh_rutracker_session_if_required", side_effect=refresh):
+            self.assertTrue(background_loop.run_check_with_auth_refresh())
+
+        self.assertEqual(len(checks), 2)
 
 
 class ParserTests(unittest.TestCase):
