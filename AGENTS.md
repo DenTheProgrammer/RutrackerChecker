@@ -5,3 +5,4 @@
 - Don't do UI visual checks if not asked.
 - Update this agent instruction file if you feel the need to do so. Like add repeated instructions or human preferences.
 - If launcher code changes, publish the root `RutrackerChecker.exe` before finishing.
+- With IMDb search sync enabled, resolve the movie details before searching RuTracker. Do not search the initially entered text while metadata is pending or unavailable.

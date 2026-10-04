@@ -12,6 +12,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import unicodedata
 import datetime as dt
 import base64
 from dataclasses import dataclass
@@ -382,6 +383,12 @@ def parse_next_page_url(html: str, current_url: str) -> str | None:
 
 
 def quote_rutracker_query(query: str) -> str:
+    query = "".join(
+        character
+        if character.encode("cp1251", errors="ignore")
+        else unicodedata.normalize("NFKD", character)
+        for character in query
+    )
     return urllib.parse.quote_from_bytes(query.encode("cp1251", errors="ignore"))
 
 
@@ -1060,6 +1067,13 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_results_item_new
                 ON results(item_id, is_new);
 
+            CREATE TRIGGER IF NOT EXISTS clear_results_on_query_change
+            AFTER UPDATE OF query ON items
+            WHEN OLD.query <> NEW.query
+            BEGIN
+                DELETE FROM results WHERE item_id = NEW.id;
+            END;
+
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
@@ -1382,6 +1396,10 @@ class Database:
                     ELSE poster_updated_at
                 END,
                 min_seeders = ?, min_size_gb = ?, require_1080p = ?,
+                imdb_search_synced_at = CASE
+                    WHEN query <> ? OR sync_search_from_imdb <> ? OR imdb_url <> ? THEN ''
+                    ELSE imdb_search_synced_at
+                END,
                 sync_search_from_imdb = ?, enabled = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
@@ -1396,6 +1414,9 @@ class Database:
                 min_seeders,
                 min_size_gb,
                 require_1080p,
+                query,
+                sync_search_from_imdb,
+                imdb_url,
                 sync_search_from_imdb,
                 enabled,
                 item_id,
@@ -1510,9 +1531,23 @@ class Database:
         rows = self.conn().execute(sql, params).fetchall()
         return [dict(row) for row in rows]
 
-    def save_results(self, item_id: int, results: list[SearchResult]) -> list[dict[str, Any]]:
+    def save_results(
+        self,
+        item_id: int,
+        results: list[SearchResult],
+        checked_query: str | None = None,
+    ) -> list[dict[str, Any]]:
         new_rows: list[dict[str, Any]] = []
         connection = self.conn()
+        if checked_query is not None:
+            # Keep the query check and result writes atomic with metadata updates.
+            connection.execute("BEGIN IMMEDIATE")
+            item = self.get_item(item_id)
+            if item is None or item["query"] != checked_query:
+                connection.rollback()
+                if item is None:
+                    raise KeyError("item not found")
+                raise TransientRuTrackerError("Search query changed during the check")
         for result in results:
             cursor = connection.execute(
                 """
@@ -1867,6 +1902,13 @@ class CheckerService:
         if not item:
             raise KeyError("item not found")
 
+        if item.get("sync_search_from_imdb", 1) and not item.get("imdb_search_synced_at"):
+            metadata = refresh_item_metadata(self.db, item_id)
+            item = metadata["item"]
+            if not item.get("imdb_search_synced_at"):
+                details = metadata["metadata_error"] or "фильм не найден в IMDb"
+                raise TransientRuTrackerError(f"Не удалось уточнить данные фильма: {details}")
+
         raw_results = self.client.search(item["query"])
         filtered = filter_results(
             raw_results,
@@ -1874,7 +1916,7 @@ class CheckerService:
             float(item["min_size_gb"]),
             bool(item["require_1080p"]),
         )
-        new_rows = self.db.save_results(item_id, filtered)
+        new_rows = self.db.save_results(item_id, filtered, checked_query=item["query"])
         pruned_new = self.db.reset_new_that_fails_filter(
             item_id,
             int(item["min_seeders"]),
@@ -1914,6 +1956,7 @@ class CheckerService:
                 last_error = exc
                 if not self.is_retryable_check_error(exc) or used_attempts >= attempts:
                     break
+                item = None
                 time.sleep(INITIAL_ITEM_CHECK_RETRY_SECONDS * (attempt + 1))
 
         item = item or self.db.get_item(item_id)
@@ -2795,7 +2838,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                 public_settings = DB.get_public_settings()
                 for item in items:
                     item["results"] = DB.list_results(int(item["id"]))
-                    item["search_url"] = RuTrackerClient.search_url(item["query"])
+                    item["search_url"] = (
+                        RuTrackerClient.search_url(item["query"])
+                        if not item["sync_search_from_imdb"] or item["imdb_search_synced_at"]
+                        else ""
+                    )
                 self.send_json(
                     {
                         "items": items,

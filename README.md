@@ -29,8 +29,9 @@ Open `http://127.0.0.1:<port>/`, using the port in `data/server-port.txt` (norma
 
 ## Usage
 
-- Add a RuTracker search query, for example `Drama 2025`. A new card is created immediately, and its first RuTracker check starts in the background.
+- Add a movie, for example `Drama 2025`. A new card is created immediately. With IMDb search sync enabled, the background checker first resolves the movie title, year, and director, then searches RuTracker with those details. If IMDb cannot resolve the movie, the card reports a check error and waits for a later retry or corrected details.
 - Use the advanced settings in the movie dialog to override the displayed title, poster, IMDb URL, or filters.
+- Disable IMDb search sync in advanced settings to use a manual RuTracker query. Changing the query clears results from the previous query, including its `NEW` badge.
 - By default, searches run across all RuTracker sections, matching the normal site search.
 - Set the minimum number of seeders and minimum size in GB.
 - Click `Check` for one query or `Check all` for all enabled queries. Manual `Check all` runs in the background and each card stops showing its check spinner as soon as that card's RuTracker request finishes.

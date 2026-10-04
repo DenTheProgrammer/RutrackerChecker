@@ -525,7 +525,8 @@ function createMovieCard(item) {
   const main = document.createElement("button");
   main.type = "button";
   main.className = "card-main";
-  main.title = "Открыть поиск RuTracker";
+  main.disabled = !item.search_url;
+  main.title = item.search_url ? "Открыть поиск RuTracker" : "Сначала уточните данные фильма";
   main.addEventListener("click", () => {
     window.open(withRutrackerSeedSort(item.search_url), "_blank", "noreferrer");
   });
@@ -829,7 +830,7 @@ async function saveMovie(event) {
     if (!id && item.initial_check_started) {
       startCheckPolling();
     }
-    if (!data.poster_url) {
+    if (!data.poster_url && (id || !item.initial_check_started || !data.sync_search_from_imdb)) {
       refreshMetadata(item.id);
     }
   } catch (error) {

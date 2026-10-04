@@ -143,6 +143,13 @@ class ParserTests(unittest.TestCase):
     def test_quotes_cyrillic_query_for_rutracker(self):
         self.assertEqual(quote_rutracker_query("Драма 2025"), "%C4%F0%E0%EC%E0%202025")
 
+    def test_search_url_preserves_letters_in_accented_director_name(self):
+        self.assertEqual(
+            RuTrackerClient.search_url("Digger 2026 Alejandro González Iñárritu"),
+            "https://rutracker.org/forum/tracker.php?nm=Digger%202026%20Alejandro%20Gonzalez%20Inarritu&o=10&s=2",
+        )
+        self.assertEqual(quote_rutracker_query("Й ё"), "%C9%20%B8")
+
     def test_search_url_sorts_by_seeders_descending(self):
         self.assertEqual(
             RuTrackerClient.search_url("Drama 2025"),
@@ -573,6 +580,8 @@ class DatabaseTests(unittest.TestCase):
                     "sync_search_from_imdb": False,
                 }
             )
+            db.save_results(item["id"], parse_rutracker_results(SAMPLE_HTML))
+            original_results = db.list_results(item["id"])
 
             with patch(
                 "app.fetch_movie_metadata",
@@ -588,7 +597,162 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(payload["item"]["query"], "manual rutracker query")
             self.assertEqual(payload["item"]["sync_search_from_imdb"], 0)
             self.assertEqual(payload["item"]["imdb_search_synced_at"], "")
+            self.assertEqual(db.list_results(item["id"]), original_results)
             db.close()
+
+    def test_changed_queries_clear_only_their_own_results(self):
+        for update_kind in ("manual", "metadata"):
+            with self.subTest(update_kind=update_kind), tempfile.TemporaryDirectory() as tmp:
+                db = Database(Path(tmp) / "app.db")
+                item = db.create_item({"query": "Digger"})
+                other = db.create_item({"query": "Drama 2025"})
+                results = parse_rutracker_results(SAMPLE_HTML)
+                db.save_results(item["id"], results[:1])
+                db.reset_new(item["id"])
+                db.save_results(item["id"], results[1:])
+                db.save_results(other["id"], results)
+                other_results = db.list_results(other["id"])
+
+                if update_kind == "manual":
+                    db.update_item(item["id"], {"query": "Digger 2026"})
+                else:
+                    db.update_item_metadata(item["id"], "", "", "Digger 2026")
+
+                self.assertEqual(db.list_results(item["id"]), [])
+                self.assertEqual(db.count_new(item["id"]), 0)
+                self.assertEqual(db.list_results(other["id"]), other_results)
+                db.close()
+
+    def test_same_query_updates_preserve_result_history_and_new_badges(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            item = db.create_item({"query": "Drama 2025"})
+            db.save_results(item["id"], parse_rutracker_results(SAMPLE_HTML))
+            original_results = db.list_results(item["id"])
+
+            db.update_item(item["id"], {"title": "New title", "min_seeders": 8})
+            db.update_item_metadata(item["id"], "", "https://example.com/poster.jpg", "Drama 2025")
+
+            self.assertEqual(db.list_results(item["id"]), original_results)
+            db.close()
+
+    def test_check_retries_current_query_after_metadata_changes_during_search(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "app.db"
+            db = Database(db_path)
+            metadata_db = Database(db_path)
+            item = db.create_item({"query": "Digger"})
+            db.update_item_metadata(item["id"], "", "", "Digger")
+            item = db.get_item(item["id"])
+            stale_result = SearchResult(
+                topic_id="6011963",
+                title="The Well Digger's Daughter (1940) 1080p",
+                url="https://rutracker.org/forum/viewtopic.php?t=6011963",
+                seeders=6,
+                resolution="1080p",
+                size_bytes=38 * 1024**3,
+            )
+            current_query = "Digger 2026 Alejandro González Iñárritu"
+            current_result = SearchResult(
+                topic_id="999",
+                title="Digger (2026) 1080p",
+                url="https://rutracker.org/forum/viewtopic.php?t=999",
+                seeders=10,
+                resolution="1080p",
+                size_bytes=8 * 1024**3,
+            )
+            queries = []
+            notifications = []
+
+            class ChangingClient:
+                def search(self, query):
+                    queries.append(query)
+                    if len(queries) == 1:
+                        metadata_db.update_item_metadata(item["id"], "", "", current_query)
+                        return [stale_result]
+                    return [current_result]
+
+            class FakeNotifier:
+                def send_new_results(self, checked_item, rows):
+                    notifications.append((checked_item, rows))
+
+            service = CheckerService(db, ChangingClient(), FakeNotifier())
+            with patch.object(app.time, "sleep"):
+                summary = service.check_item_with_retries(item["id"], item=item, attempts=2)
+
+            self.assertEqual(queries, ["Digger", current_query])
+            self.assertEqual(summary["item"]["query"], current_query)
+            self.assertEqual(summary["attempts"], 2)
+            self.assertEqual(summary["pending_new"], 1)
+            self.assertEqual([row["topic_id"] for row in db.list_results(item["id"])], ["999"])
+            self.assertEqual(len(notifications), 1)
+            self.assertEqual(notifications[0][0]["query"], current_query)
+            self.assertEqual([row["topic_id"] for row in notifications[0][1]], ["999"])
+            metadata_db.close()
+            db.close()
+
+    def test_first_check_resolves_imdb_before_searching_rutracker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            item = db.create_item({"query": "Digger"})
+            current_query = "Digger 2026 Alejandro González Iñárritu"
+            client = RuTrackerClient(db)
+
+            def search_refined(query):
+                self.assertEqual(query, current_query)
+                self.assertTrue(db.get_item(item["id"])["imdb_search_synced_at"])
+                return []
+
+            with patch(
+                "app.fetch_movie_metadata",
+                return_value={
+                    "imdb_url": "https://www.imdb.com/title/tt31450459/",
+                    "search_text": current_query,
+                },
+            ) as metadata, patch.object(client, "search", side_effect=search_refined) as search:
+                service = CheckerService(db, client, None)
+                summary = service.check_new_item_with_retries(item["id"], notify=False)
+                service.check_item(item["id"], notify=False)
+
+            metadata.assert_called_once_with("Digger", "", "Digger")
+            self.assertEqual(search.call_count, 2)
+            self.assertEqual(summary["item"]["query"], current_query)
+            self.assertNotIn("error", summary)
+            db.close()
+
+    def test_imdb_failure_never_searches_initial_text(self):
+        for metadata_result in (RuntimeError("IMDb unavailable"), {}):
+            with self.subTest(metadata_result=metadata_result), tempfile.TemporaryDirectory() as tmp:
+                db = Database(Path(tmp) / "app.db")
+                item = db.create_item({"query": "Digger"})
+                client = RuTrackerClient(db)
+                metadata_options = (
+                    {"side_effect": metadata_result}
+                    if isinstance(metadata_result, Exception)
+                    else {"return_value": metadata_result}
+                )
+                with patch("app.fetch_movie_metadata", **metadata_options), patch.object(client, "search") as search:
+                    service = CheckerService(db, client, None)
+                    summary = service.check_new_item_with_retries(item["id"], notify=False, attempts=1)
+
+                search.assert_not_called()
+                self.assertIn("Не удалось уточнить данные фильма", summary["error"])
+                self.assertEqual(db.list_results(item["id"]), [])
+                db.close()
+
+    def test_editing_search_details_requires_new_metadata_sync(self):
+        for payload in (
+            {"query": "Other movie"},
+            {"imdb_url": "https://www.imdb.com/title/tt1234567/"},
+            {"sync_search_from_imdb": False},
+        ):
+            with self.subTest(payload=payload), tempfile.TemporaryDirectory() as tmp:
+                db = Database(Path(tmp) / "app.db")
+                item = db.create_item({"query": "Digger"})
+                db.update_item_metadata(item["id"], "", "", "Digger 2026")
+                updated = db.update_item(item["id"], payload)
+                self.assertEqual(updated["imdb_search_synced_at"], "")
+                db.close()
 
     def test_refresh_missing_posters_syncs_existing_imdb_search_details(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -903,6 +1067,17 @@ class DatabaseTests(unittest.TestCase):
                     self.assertEqual(payload["query"], "Drama 2026")
                     self.assertEqual(started_checks, [payload["id"]])
                     self.assertTrue(payload["initial_check_started"])
+                    with urllib.request.urlopen(url, timeout=5) as response:
+                        pending = json.loads(response.read().decode("utf-8"))
+                    self.assertEqual(pending["items"][0]["search_url"], "")
+
+                    db.update_item_metadata(payload["id"], "", "", "Drama 2026 Director")
+                    with urllib.request.urlopen(url, timeout=5) as response:
+                        ready = json.loads(response.read().decode("utf-8"))
+                    self.assertEqual(
+                        ready["items"][0]["search_url"],
+                        RuTrackerClient.search_url("Drama 2026 Director"),
+                    )
                 finally:
                     server.shutdown()
                     server.server_close()
@@ -1262,7 +1437,7 @@ class DatabaseTests(unittest.TestCase):
     def test_initial_item_check_retries_transient_errors(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / "app.db")
-            item = db.create_item({"title": "Drama", "query": "Drama 2026"})
+            item = db.create_item({"title": "Drama", "query": "Drama 2026", "sync_search_from_imdb": False})
 
             class FlakyClient:
                 def __init__(self) -> None:
@@ -1303,7 +1478,7 @@ class DatabaseTests(unittest.TestCase):
     def test_check_all_uses_item_retry_logic(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / "app.db")
-            item = db.create_item({"title": "Drama", "query": "Drama 2026"})
+            item = db.create_item({"title": "Drama", "query": "Drama 2026", "sync_search_from_imdb": False})
 
             class FlakyClient:
                 def __init__(self) -> None:
@@ -1359,7 +1534,7 @@ class DatabaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / "app.db")
             items = [
-                db.create_item({"title": f"Movie {index}", "query": f"Movie {index}"})
+                db.create_item({"title": f"Movie {index}", "query": f"Movie {index}", "sync_search_from_imdb": False})
                 for index in range(3)
             ]
             release_checks = threading.Event()
