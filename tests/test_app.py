@@ -174,6 +174,129 @@ class ParserTests(unittest.TestCase):
         self.assertIsNone(parse_resolution("Movie 720p"))
 
 
+class ImdbRatingTests(unittest.TestCase):
+    def fetch_payload(self, payload):
+        with patch("app.urllib.request.urlopen") as request:
+            request.return_value.__enter__.return_value.read.return_value = json.dumps(payload).encode("utf-8")
+            rating = app.fetch_imdb_rating("https://www.imdb.com/title/tt31450459/")
+            sent = request.call_args.args[0]
+            self.assertEqual(sent.full_url, app.IMDB_GRAPHQL_URL)
+            self.assertEqual(sent.method, "POST")
+            self.assertIn('title(id: "tt31450459")', json.loads(sent.data)["query"])
+            self.assertEqual(request.call_args.kwargs["timeout"], 6)
+            return rating
+
+    def test_fetches_rating_and_vote_count_from_requested_title(self):
+        self.assertEqual(
+            self.fetch_payload({"data": {"title": {
+                "id": "tt31450459",
+                "ratingsSummary": {"aggregateRating": 7.3, "voteCount": 11082},
+            }}}),
+            (7.3, 11082),
+        )
+
+    def test_no_votes_is_a_successful_unrated_response(self):
+        self.assertEqual(
+            self.fetch_payload({"data": {"title": {
+                "id": "tt31450459",
+                "ratingsSummary": {"aggregateRating": None, "voteCount": 0},
+            }}}),
+            (None, 0),
+        )
+
+    def test_rejects_error_wrong_title_and_invalid_ratings(self):
+        payloads = [
+            {"errors": [{"message": "Unavailable"}]},
+            {"data": {"title": None}},
+            {"data": {"title": {"id": "tt1111111"}}},
+        ]
+        for rating, votes in ((11, 10), (0, 10), (True, 10), (7.2, -1), (None, 10), (7.2, 0)):
+            payloads.append({"data": {"title": {
+                "id": "tt31450459",
+                "ratingsSummary": {"aggregateRating": rating, "voteCount": votes},
+            }}})
+        for payload in payloads:
+            with self.subTest(payload=payload), self.assertRaises((RuntimeError, ValueError)):
+                self.fetch_payload(payload)
+
+    def test_rating_is_rechecked_when_missing_and_when_already_available(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            item = db.create_item({
+                "query": "Digger 2026",
+                "imdb_url": "https://www.imdb.com/title/tt31450459/",
+                "sync_search_from_imdb": False,
+                "min_size_gb": 1,
+            })
+            db.save_results(item["id"], parse_rutracker_results(SAMPLE_HTML)[:1])
+            history = db.list_results(item["id"])
+            client = RuTrackerClient(db)
+            service = CheckerService(db, client, None)
+            with patch("app.fetch_imdb_rating", side_effect=[(None, 0), (7.3, 10), (7.4, 30)]) as fetch, \
+                 patch.object(client, "search", return_value=[]) as search:
+                for expected in (None, 7.3, 7.4):
+                    summary = service.check_item(item["id"], notify=False)
+                    self.assertEqual(summary["item"]["imdb_rating"], expected)
+                    self.assertTrue(summary["item"]["imdb_rating_checked_at"])
+                    self.assertEqual(summary["item"]["imdb_rating_error"], "")
+
+            self.assertEqual(fetch.call_count, 3)
+            self.assertEqual(search.call_count, 3)
+            self.assertEqual(db.get_item(item["id"])["imdb_rating_votes"], 30)
+            self.assertEqual(db.list_results(item["id"]), history)
+            self.assertEqual(db.get_item(item["id"])["updated_at"], item["updated_at"])
+            db.close()
+
+    def test_imdb_failure_keeps_rating_and_still_checks_rutracker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            item = db.create_item({
+                "query": "Digger 2026",
+                "imdb_url": "https://www.imdb.com/title/tt31450459/",
+                "sync_search_from_imdb": False,
+            })
+            db.update_item_rating(item["id"], item["imdb_url"], 7.3, 100)
+            client = RuTrackerClient(db)
+            with patch("app.fetch_imdb_rating", side_effect=TimeoutError("IMDb timeout")), \
+                 patch.object(client, "search", return_value=[]) as search:
+                summary = CheckerService(db, client, None).check_item(item["id"], notify=False)
+
+            search.assert_called_once_with("Digger 2026")
+            self.assertNotIn("error", summary)
+            self.assertEqual(summary["item"]["imdb_rating"], 7.3)
+            self.assertEqual(summary["item"]["imdb_rating_votes"], 100)
+            self.assertEqual(summary["item"]["imdb_rating_error"], "IMDb timeout")
+            db.close()
+
+    def test_old_movie_rating_cannot_be_saved_after_imdb_link_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            item = db.create_item({"query": "Digger", "imdb_url": "https://www.imdb.com/title/tt31450459/"})
+            db.update_item_rating(item["id"], item["imdb_url"], 7.3, 100)
+
+            def change_movie(url):
+                db.update_item_metadata(item["id"], "https://www.imdb.com/title/tt0111161/", "", "Shawshank 1994")
+                return 7.5, 200
+
+            with patch("app.fetch_imdb_rating", side_effect=change_movie):
+                updated = app.refresh_item_rating(db, item["id"])
+
+            self.assertEqual(updated["imdb_url"], "https://www.imdb.com/title/tt0111161/")
+            self.assertIsNone(updated["imdb_rating"])
+            self.assertEqual(updated["imdb_rating_votes"], 0)
+            self.assertEqual(updated["imdb_rating_checked_at"], "")
+            db.close()
+
+    def test_manual_query_without_imdb_link_does_not_request_a_rating(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "app.db")
+            item = db.create_item({"query": "manual search", "sync_search_from_imdb": False})
+            with patch("app.fetch_imdb_rating") as fetch:
+                self.assertEqual(app.refresh_item_rating(db, item["id"]), item)
+            fetch.assert_not_called()
+            db.close()
+
+
 class NotificationTests(unittest.TestCase):
     def test_notifies_pending_reminder_when_due(self):
         now = dt.datetime(2026, 6, 17, 12, 0, tzinfo=dt.timezone.utc)
@@ -513,6 +636,10 @@ class DatabaseTests(unittest.TestCase):
             }
 
             self.assertIn("imdb_url", columns)
+            self.assertIn("imdb_rating", columns)
+            self.assertIn("imdb_rating_votes", columns)
+            self.assertIn("imdb_rating_checked_at", columns)
+            self.assertIn("imdb_rating_error", columns)
             self.assertIn("poster_url", columns)
             self.assertIn("poster_updated_at", columns)
             self.assertIn("imdb_search_synced_at", columns)
@@ -709,7 +836,8 @@ class DatabaseTests(unittest.TestCase):
                     "imdb_url": "https://www.imdb.com/title/tt31450459/",
                     "search_text": current_query,
                 },
-            ) as metadata, patch.object(client, "search", side_effect=search_refined) as search:
+            ) as metadata, patch.object(client, "search", side_effect=search_refined) as search, \
+                 patch("app.fetch_imdb_rating", return_value=(None, 0)):
                 service = CheckerService(db, client, None)
                 summary = service.check_new_item_with_retries(item["id"], notify=False)
                 service.check_item(item["id"], notify=False)
@@ -1071,13 +1199,18 @@ class DatabaseTests(unittest.TestCase):
                         pending = json.loads(response.read().decode("utf-8"))
                     self.assertEqual(pending["items"][0]["search_url"], "")
 
-                    db.update_item_metadata(payload["id"], "", "", "Drama 2026 Director")
+                    db.update_item_metadata(
+                        payload["id"], "https://www.imdb.com/title/tt31450459/", "", "Drama 2026 Director"
+                    )
+                    db.update_item_rating(payload["id"], "https://www.imdb.com/title/tt31450459/", 7.3, 100)
                     with urllib.request.urlopen(url, timeout=5) as response:
                         ready = json.loads(response.read().decode("utf-8"))
                     self.assertEqual(
                         ready["items"][0]["search_url"],
                         RuTrackerClient.search_url("Drama 2026 Director"),
                     )
+                    self.assertEqual(ready["items"][0]["imdb_rating"], 7.3)
+                    self.assertEqual(ready["items"][0]["imdb_rating_votes"], 100)
                 finally:
                     server.shutdown()
                     server.server_close()

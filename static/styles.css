@@ -886,6 +886,13 @@ button:disabled {
   font-size: 12px;
 }
 
+.card-meta .imdb-rating-chip:not(.is-unrated) {
+  border-color: #f5c518;
+  color: #181818;
+  background: #f5c518;
+  font-weight: 700;
+}
+
 .card-meta .checking-chip {
   border-color: color-mix(in srgb, var(--primary) 46%, var(--border));
   color: var(--primary);

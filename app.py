@@ -40,6 +40,7 @@ RUTRACKER_SORT_SEEDERS = "10"
 RUTRACKER_SORT_DESCENDING = "2"
 IMDB_BASE_URL = "https://www.imdb.com"
 IMDB_SUGGESTION_BASE_URL = "https://v3.sg.media-imdb.com/suggestion"
+IMDB_GRAPHQL_URL = "https://api.graphql.imdb.com/"
 WIKIDATA_API_URL = "https://www.wikidata.org/w/api.php"
 WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
 WIKIMEDIA_FILE_PATH_BASE = "https://commons.wikimedia.org/wiki/Special:FilePath"
@@ -460,6 +461,62 @@ def imdb_title_id_from_url(value: Any) -> str:
         return ""
     match = re.search(r"/title/(tt\d+)", urllib.parse.urlparse(url).path)
     return match.group(1) if match else ""
+
+
+def fetch_imdb_rating(imdb_url: str) -> tuple[float | None, int]:
+    title_id = imdb_title_id_from_url(imdb_url)
+    if not title_id:
+        raise ValueError("IMDb title URL is required")
+    query = (
+        f'query TitleRating {{ title(id: "{title_id}") '
+        "{ id ratingsSummary { aggregateRating voteCount } } }"
+    )
+    request = urllib.request.Request(
+        IMDB_GRAPHQL_URL,
+        data=json.dumps({"query": query, "operationName": "TitleRating"}).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": METADATA_USER_AGENT,
+            "Origin": IMDB_BASE_URL,
+            "Referer": f"{IMDB_BASE_URL}/",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=6) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, dict) or payload.get("errors"):
+        raise RuntimeError("IMDb could not return the rating")
+    data = payload.get("data")
+    title = data.get("title") if isinstance(data, dict) else None
+    if not isinstance(title, dict) or title.get("id") != title_id:
+        raise RuntimeError("IMDb did not return the requested movie")
+    summary = title.get("ratingsSummary")
+    if not isinstance(summary, dict):
+        raise RuntimeError("IMDb rating data is unavailable")
+    rating = summary.get("aggregateRating")
+    votes = summary.get("voteCount")
+    if not isinstance(votes, int) or isinstance(votes, bool) or votes < 0:
+        raise ValueError("Invalid IMDb vote count")
+    if rating is None and votes == 0:
+        return None, 0
+    if not isinstance(rating, (int, float)) or isinstance(rating, bool) or not 1 <= rating <= 10 or votes == 0:
+        raise ValueError("Invalid IMDb rating")
+    return float(rating), votes
+
+
+def refresh_item_rating(db: "Database", item_id: int) -> dict[str, Any]:
+    item = db.get_item(item_id)
+    if item is None:
+        raise KeyError("item not found")
+    imdb_url = str(item.get("imdb_url") or "")
+    if not imdb_title_id_from_url(imdb_url):
+        return item
+    rating, votes, error = None, 0, ""
+    try:
+        rating, votes = fetch_imdb_rating(imdb_url)
+    except Exception as exc:
+        error = str(exc)
+    return db.update_item_rating(item_id, imdb_url, rating, votes, error)
 
 
 def fetch_html(url: str) -> str:
@@ -1036,6 +1093,10 @@ class Database:
                 title TEXT NOT NULL,
                 query TEXT NOT NULL,
                 imdb_url TEXT NOT NULL DEFAULT '',
+                imdb_rating REAL,
+                imdb_rating_votes INTEGER NOT NULL DEFAULT 0,
+                imdb_rating_checked_at TEXT NOT NULL DEFAULT '',
+                imdb_rating_error TEXT NOT NULL DEFAULT '',
                 poster_url TEXT NOT NULL DEFAULT '',
                 poster_updated_at TEXT NOT NULL DEFAULT '',
                 imdb_search_synced_at TEXT NOT NULL DEFAULT '',
@@ -1082,6 +1143,10 @@ class Database:
             """
         )
         self.ensure_column(connection, "items", "imdb_url", "TEXT NOT NULL DEFAULT ''")
+        self.ensure_column(connection, "items", "imdb_rating", "REAL")
+        self.ensure_column(connection, "items", "imdb_rating_votes", "INTEGER NOT NULL DEFAULT 0")
+        self.ensure_column(connection, "items", "imdb_rating_checked_at", "TEXT NOT NULL DEFAULT ''")
+        self.ensure_column(connection, "items", "imdb_rating_error", "TEXT NOT NULL DEFAULT ''")
         self.ensure_column(connection, "items", "poster_url", "TEXT NOT NULL DEFAULT ''")
         self.ensure_column(connection, "items", "poster_updated_at", "TEXT NOT NULL DEFAULT ''")
         self.ensure_column(connection, "items", "imdb_search_synced_at", "TEXT NOT NULL DEFAULT ''")
@@ -1090,6 +1155,19 @@ class Database:
         self.ensure_column(connection, "items", "sync_search_from_imdb", "INTEGER NOT NULL DEFAULT 1")
         self.ensure_column(connection, "results", "size_bytes", "INTEGER NOT NULL DEFAULT 0")
         self.ensure_column(connection, "results", "size_label", "TEXT NOT NULL DEFAULT ''")
+        connection.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS clear_rating_on_imdb_change
+            AFTER UPDATE OF imdb_url ON items
+            WHEN OLD.imdb_url <> NEW.imdb_url
+            BEGIN
+                UPDATE items
+                SET imdb_rating = NULL, imdb_rating_votes = 0,
+                    imdb_rating_checked_at = '', imdb_rating_error = ''
+                WHERE id = NEW.id;
+            END;
+            """
+        )
         connection.commit()
         connection.close()
 
@@ -1475,6 +1553,30 @@ class Database:
         updated = self.get_item(item_id)
         assert updated is not None
         return updated
+
+    def update_item_rating(
+        self,
+        item_id: int,
+        imdb_url: str,
+        rating: float | None,
+        votes: int,
+        error: str = "",
+    ) -> dict[str, Any]:
+        self.conn().execute(
+            """
+            UPDATE items
+            SET imdb_rating = CASE WHEN ? = '' THEN ? ELSE imdb_rating END,
+                imdb_rating_votes = CASE WHEN ? = '' THEN ? ELSE imdb_rating_votes END,
+                imdb_rating_checked_at = ?, imdb_rating_error = ?
+            WHERE id = ? AND imdb_url = ?
+            """,
+            (error, rating, error, votes, iso_now(), error, item_id, imdb_url),
+        )
+        self.conn().commit()
+        item = self.get_item(item_id)
+        if item is None:
+            raise KeyError("item not found")
+        return item
 
     def delete_item(self, item_id: int) -> None:
         self.conn().execute("DELETE FROM results WHERE item_id = ?", (item_id,))
@@ -1908,6 +2010,13 @@ class CheckerService:
             if not item.get("imdb_search_synced_at"):
                 details = metadata["metadata_error"] or "фильм не найден в IMDb"
                 raise TransientRuTrackerError(f"Не удалось уточнить данные фильма: {details}")
+
+        checked_query = item["query"]
+        item = refresh_item_rating(self.db, item_id)
+        if item["query"] != checked_query or (
+            item["sync_search_from_imdb"] and not item["imdb_search_synced_at"]
+        ):
+            raise TransientRuTrackerError("Movie details changed during the rating check")
 
         raw_results = self.client.search(item["query"])
         filtered = filter_results(

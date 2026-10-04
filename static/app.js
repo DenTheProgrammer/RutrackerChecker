@@ -560,6 +560,21 @@ function createMovieCard(item) {
   title.textContent = item.title || item.query;
   const meta = document.createElement("div");
   meta.className = "card-meta";
+  if (item.imdb_url) {
+    const rating = Number(item.imdb_rating);
+    const hasRating = item.imdb_rating != null && Number.isFinite(rating) && rating >= 1 && rating <= 10;
+    const chip = document.createElement("span");
+    chip.className = `imdb-rating-chip ${hasRating ? "" : "is-unrated"}`.trim();
+    chip.textContent = hasRating ? `★ IMDb ${rating.toFixed(1)}` : "IMDb —";
+    chip.title = item.imdb_rating_error
+      ? "IMDb временно недоступен. Оценка обновится при следующей проверке."
+      : hasRating
+        ? `${Number(item.imdb_rating_votes || 0).toLocaleString("ru-RU")} голосов · оценка обновляется при каждой проверке`
+        : item.imdb_rating_checked_at
+          ? "Оценка IMDb ещё не появилась. Проверим снова при следующей проверке фильма."
+          : "Оценка IMDb загрузится при проверке фильма.";
+    meta.append(chip);
+  }
   for (const text of [
     `${item.min_seeders}+ сидов`,
     `${item.min_size_gb}+ GB`,

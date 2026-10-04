@@ -35,6 +35,7 @@ Open `http://127.0.0.1:<port>/`, using the port in `data/server-port.txt` (norma
 - By default, searches run across all RuTracker sections, matching the normal site search.
 - Set the minimum number of seeders and minimum size in GB.
 - Click `Check` for one query or `Check all` for all enabled queries. Manual `Check all` runs in the background and each card stops showing its check spinner as soon as that card's RuTracker request finishes.
+- Cards show the IMDb rating and refresh it during each manual or background check. Movies without a rating show `IMDb —` and are checked again next time. If IMDb is temporarily unavailable, the last saved rating is kept and RuTracker checking continues.
 - Click a title to open the RuTracker search page.
 - Review new result links manually, then click `Reset new` to clear the badge.
 
