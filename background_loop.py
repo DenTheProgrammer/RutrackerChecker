@@ -15,6 +15,7 @@ from app import DB, DEFAULT_CHECK_INTERVAL_MINUTES, UPDATE_SERVICE
 DATA_DIR = Path(__file__).resolve().parent / "data"
 LOG_PATH = DATA_DIR / "checks.log"
 RUNTIME_STATUS_PATH = DATA_DIR / "runtime_status.json"
+LOCK_PATH = DATA_DIR / "background_loop.lock"
 LAUNCHER_PATH = DATA_DIR.parent / "RutrackerChecker.exe"
 
 
@@ -39,9 +40,49 @@ def write_runtime_status(**updates: object) -> None:
             **updates,
         }
     )
-    tmp_path = RUNTIME_STATUS_PATH.with_suffix(".tmp")
-    tmp_path.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp_path.replace(RUNTIME_STATUS_PATH)
+    tmp_path = RUNTIME_STATUS_PATH.with_name(f"{RUNTIME_STATUS_PATH.stem}.{os.getpid()}.tmp")
+    try:
+        tmp_path.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+        # Readers (UI server, tray) may briefly hold the target open, which blocks replace on Windows.
+        for attempt in range(5):
+            try:
+                tmp_path.replace(RUNTIME_STATUS_PATH)
+                return
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.1)
+    except OSError as exc:
+        # The heartbeat is best effort; a missed write must not fail the check itself.
+        print(f"Runtime status write failed: {exc}")
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def acquire_single_instance_lock(timeout_seconds: float = 10) -> object | None:
+    DATA_DIR.mkdir(exist_ok=True)
+    handle = LOCK_PATH.open("a+b")
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return handle
+        except OSError:
+            # A replaced instance may still be releasing the lock while it exits.
+            if time.monotonic() >= deadline:
+                handle.close()
+                return None
+            time.sleep(0.5)
 
 
 def log_loop_error(exc: Exception) -> None:
@@ -146,6 +187,11 @@ def refresh_update_status() -> None:
 
 
 def main() -> int:
+    instance_lock = acquire_single_instance_lock()
+    if instance_lock is None:
+        print("Another background loop is already running")
+        return 0
+
     while True:
         if not background_enabled():
             write_runtime_status(

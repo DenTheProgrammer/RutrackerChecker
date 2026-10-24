@@ -107,6 +107,40 @@ class StartupTests(unittest.TestCase):
 
         self.assertEqual(len(checks), 2)
 
+    def test_background_loop_allows_only_one_instance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(background_loop, "DATA_DIR", root), \
+                 patch.object(background_loop, "LOCK_PATH", root / "background_loop.lock"):
+                first = background_loop.acquire_single_instance_lock(timeout_seconds=0)
+                self.assertIsNotNone(first)
+                try:
+                    self.assertIsNone(background_loop.acquire_single_instance_lock(timeout_seconds=0))
+                finally:
+                    first.close()
+                second = background_loop.acquire_single_instance_lock(timeout_seconds=0)
+                self.assertIsNotNone(second)
+                second.close()
+
+    def test_runtime_status_write_failure_does_not_raise(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            status_path = root / "runtime_status.json"
+            with patch.object(background_loop, "DATA_DIR", root), \
+                 patch.object(background_loop, "RUNTIME_STATUS_PATH", status_path), \
+                 patch.object(Path, "replace", side_effect=PermissionError("locked")), \
+                 patch.object(background_loop.time, "sleep"):
+                background_loop.write_runtime_status(status="checking")
+
+            self.assertEqual(list(root.iterdir()), [])
+
+            with patch.object(background_loop, "DATA_DIR", root), \
+                 patch.object(background_loop, "RUNTIME_STATUS_PATH", status_path):
+                background_loop.write_runtime_status(status="waiting")
+
+            self.assertEqual(json.loads(status_path.read_text(encoding="utf-8"))["status"], "waiting")
+            self.assertEqual([path.name for path in root.iterdir()], ["runtime_status.json"])
+
 
 class ParserTests(unittest.TestCase):
     def test_extracts_topic_title_link_seeders(self):
